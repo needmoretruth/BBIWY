@@ -1,0 +1,17 @@
+[package]
+name = "bbiwy"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.75"
+license = "MPL-2.0"
+description = "BBIWY 런처 — 프로필마다 격리망을 만들고 경로를 잠근 뒤 브라우저를 띄운다"
+
+# 의존성이 없다. 하는 일이 「이미 검증된 도구를 정해진 순서로 부르는 것」뿐이라
+# 크레이트를 끌어올 이유가 없고, 그만큼 감사할 표면이 작아진다.
+[dependencies]
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+strip = true

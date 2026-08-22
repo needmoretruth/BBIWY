@@ -1,0 +1,32 @@
+# 빌드 산출물
+target/
+out/
+*.rlib
+*.rmeta
+
+# 내려받은 것 — 저장소에 담지 않는다
+vendor/
+*.tar.xz
+*.tar.gz
+*.mar
+
+# 계측이 남기는 것
+*.pcap
+*.jsonl
+fp-*.json
+
+# 파이썬
+__pycache__/
+*.py[cod]
+
+# 개발 도구가 남기는 것
+.playwright-mcp/
+.firecrawl/
+*.log
+
+# 편집기 · OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
