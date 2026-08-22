@@ -97,29 +97,47 @@ such a profile on this system. This is normal packaging, not a special ask.
 pasta costs about a third of loopback throughput — roughly 3.5–4 Gbit/s, far
 above any real connection. **The allow-list itself has no measurable cost.**
 
-## 7. Dropping privilege does not break Firefox's own sandbox
+## 7. Dropping *all* privilege breaks the browser. Dropping two does not.
 
-Before `exec`, the launcher drops every capability and sets `no_new_privs`.
-The obvious objection is that this might also break the browser's content
-sandbox. It does not.
+Before `exec`, the launcher removes capabilities so that nothing downstream can
+undo the allow-list. The obvious implementation — drop everything — is wrong,
+and an isolated simulation of it said otherwise.
 
-| Attempt, after the drop | Result |
-|---|---|
-| `nft flush ruleset` | **denied** |
-| `ip link add` | **denied** |
-| `unshare -Urn` (escape via root-mapped namespace) | **denied** |
-| user namespace mapping only its own uid — what Firefox does | **succeeds** |
-| allow-list still enforcing | 443 passes, 80 blocked |
+A hand-written probe that created a user namespace and mapped its own uid, the
+way Firefox's content sandbox does, succeeded under a fully emptied bounding
+set. On that basis this document previously claimed the drop was safe.
 
-The difference is that escaping requires mapping *root*, which needs
-`CAP_SETUID` in the parent namespace. Firefox maps only its own uid, which
-needs nothing.
+**Running the real browser disproved it.** Every content process died:
 
-> Two measurement traps worth knowing. After the capability drop, `nft list
-> ruleset` is also denied — checking whether rules survived by listing them
-> reports a false failure; check by behaviour. And `os._exit()` does not flush
-> stdout, so output from a forked child vanishes unless flushed first. Both
-> produced wrong verdicts here before being caught.
+```
+Sandbox: writing /proc/self/uid_map: EPERM
+... process 110 exited on signal 11
+```
+
+Measured properly, all three cases in one harness — does the allow-list survive
+tampering, and does the browser actually run:
+
+| capability drop | `nft flush ruleset` | browser |
+|---|---|---|
+| none | **succeeds — design defeated** | runs |
+| `--bounding-set=-all` | denied | **every content process dies** |
+| **`--bounding-set=-net_admin,-net_raw`** | **denied** | **runs normally** |
+
+So the launcher drops exactly `CAP_NET_ADMIN` and `CAP_NET_RAW`, plus
+`no_new_privs`. Removing them from the *bounding* set means they can never be
+regained, by the browser or anything it spawns, while everything Firefox needs
+for its own sandbox stays intact.
+
+With that drop in place: `nft flush ruleset` denied, `ip link add` denied,
+escape into a root-mapped namespace denied, and the allow-list still enforcing —
+443 passes, 80 blocked.
+
+> Three measurement traps, all of which produced wrong answers here before being
+> caught. After the capability drop, `nft list ruleset` is *also* denied, so
+> checking whether rules survived by listing them reports a false failure; check
+> by behaviour instead. `os._exit()` does not flush stdout, so output from a
+> forked child vanishes. And `timeout` cannot invoke a shell function, which
+> silently turned an entire comparison into "command not found" for every case.
 
 ## 8. One installation can lock a pref differently per profile
 

@@ -1,27 +1,31 @@
-//! BBIWY 런처.
+//! BBIWY launcher.
 //!
-//! 하는 일은 하나다. **프로필마다 격리망을 만들고, 그 경로만 남기고 전부 막고,
-//! 권한을 전부 떨군 뒤 브라우저를 띄운다.**
+//! It does one thing: **build an isolated network namespace for a profile,
+//! leave open only the route that profile is allowed to use, drop the
+//! capabilities that could undo that, and start the browser.**
 //!
-//! 설계에서 중요한 것 두 가지.
+//! Two decisions shape everything else.
 //!
-//! 1. **실행에 권한을 하나도 쓰지 않는다.** setuid 도우미도, 파일 capability 도,
-//!    polkit 도, systemd 서비스도 없다. 이 계열 도구가 가장 자주 뚫린 지점을
-//!    아예 만들지 않는다. (실측 10)
-//! 2. **직접 시스템콜을 부르지 않는다.** `pasta`·`nft`·`setpriv` 는 이미 있고 이미
-//!    감사받은 도구다. 그것을 정해진 순서로 부르기만 하므로 이 프로그램에는
-//!    `unsafe` 가 한 줄도 없고, 무엇을 하는지가 명령 한 줄씩으로 다 드러난다.
+//! 1. **No privilege at runtime.** No setuid helper, no file capabilities, no
+//!    polkit action, no system service. That is where tools in this category
+//!    have historically been broken, so the attack surface is simply not
+//!    created. Root is needed once, at install time, to place an AppArmor
+//!    profile — the same thing Firefox, Chrome and Brave already do.
+//! 2. **No syscalls of our own.** `pasta`, `nft` and `setpriv` already exist
+//!    and are already audited. Composing them in a fixed order means this
+//!    program contains no `unsafe`, has no dependencies, and can be understood
+//!    by reading the commands it runs.
 //!
-//! 흐름:
+//! Flow:
 //!
 //! ```text
 //!   bbiwy run tor
-//!     └ pasta --config-net --tcp-ports <허용포트> --udp-ports none
-//!         └ bbiwy __inner <설정>          ← 격리망 안. 여기부터 바깥이 안 보인다
-//!             ├ nft -f -                  ← 화이트리스트 적재 (계수기 포함)
-//!             └ setpriv --bounding-set=-all --inh-caps=-all --no-new-privs
-//!                 └ 브라우저 --profile <경로>
-//!```
+//!     └ pasta --config-net --tcp-ports <route> --udp-ports none
+//!         └ bbiwy __inner <profile>       ← inside. the outside is now invisible
+//!             ├ nft -f -                  ← allow-list, with counters
+//!             └ setpriv --bounding-set=-net_admin,-net_raw --no-new-privs
+//!                 └ browser --profile <dir>
+//! ```
 #![forbid(unsafe_code)]
 
 mod exec;
@@ -32,18 +36,18 @@ mod profile;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-BBIWY — 경로마다 격리된 브라우저
+BBIWY — a browser where every network path is sealed in its own profile
 
-사용법:
-  bbiwy doctor              이 기계에서 격리가 성립하는지 검사한다
-  bbiwy list                프로필 목록을 보여 준다
-  bbiwy run <프로필>        프로필을 격리망 안에서 띄운다
+Usage:
+  bbiwy doctor            check whether isolation actually holds on this machine
+  bbiwy list              show the profiles
+  bbiwy run <profile>     start a profile inside its isolated namespace
 
-프로필: daily · hardened · tor · i2p · session
+Profiles: daily · hardened · tor · i2p · session
 
-환경변수:
-  BBIWY_BROWSER   브라우저 실행파일 경로 (기본: 설치 경로에서 찾는다)
-  BBIWY_HOME      프로필을 두는 곳 (기본: ~/.local/share/bbiwy)
+Environment:
+  BBIWY_BROWSER   path to the browser binary (default: the install location)
+  BBIWY_HOME      where profiles live (default: ~/.local/share/bbiwy)
 ";
 
 fn main() -> ExitCode {
@@ -55,24 +59,25 @@ fn main() -> ExitCode {
         "list" => profile::list(),
         "run" => match args.get(2) {
             Some(name) => exec::run(name),
-            None => Err("프로필 이름이 필요합니다. `bbiwy list` 로 목록을 보십시오.".into()),
+            None => Err("a profile name is required. Run `bbiwy list` to see them.".into()),
         },
-        // 격리망 안에서 우리 자신이 다시 불리는 자리. 사용자가 직접 부를 일은 없다.
+        // Where we re-enter ourselves, inside the namespace. Not meant to be
+        // called by hand.
         "__inner" => match args.get(2) {
             Some(name) => exec::inner(name),
-            None => Err("__inner 에 프로필 이름이 없습니다".into()),
+            None => Err("__inner needs a profile name".into()),
         },
         "-h" | "--help" | "help" | "" => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
         }
-        other => Err(format!("모르는 명령입니다: {other}\n\n{USAGE}")),
+        other => Err(format!("unknown command: {other}\n\n{USAGE}")),
     };
 
     match r {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("오류: {e}");
+            eprintln!("error: {e}");
             ExitCode::FAILURE
         }
     }

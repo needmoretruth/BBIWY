@@ -1,30 +1,30 @@
-# 빌드 산출물
+# Build output
 target/
 out/
 *.rlib
 *.rmeta
 
-# 내려받은 것 — 저장소에 담지 않는다
+# Downloaded — not carried in the repository
 vendor/
 *.tar.xz
 *.tar.gz
 *.mar
 
-# 계측이 남기는 것
+# Left behind by measurement runs
 *.pcap
 *.jsonl
 fp-*.json
 
-# 파이썬
+# Python
 __pycache__/
 *.py[cod]
 
-# 개발 도구가 남기는 것
+# Left behind by development tooling
 .playwright-mcp/
 .firecrawl/
 *.log
 
-# 편집기 · OS
+# Editors and OS
 .vscode/
 .idea/
 *.swp

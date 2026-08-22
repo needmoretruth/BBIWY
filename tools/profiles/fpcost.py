@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""fpcost — 「데일리를 쓸 만하게 만드는 것」이 지문을 얼마나 깨는가.
+"""fpcost — what does making the daily profile usable actually cost?
 
-오너 질문(2026-08-22): 5개 다 뮬바드 기반인데 데일리만 지문을 다르게 할 이유가 있나.
+If every profile is built on the same base, is there any reason for the daily
 
-그 답은 「무엇을 풀어 주느냐에 달렸다」이고, 항목마다 값이 다르다. 어떤 완화는
-지문에 전혀 안 보이고(공짜), 어떤 완화는 곧바로 지문 차이가 된다(대가). 그 선을
-추측이 아니라 실제 값으로 긋는다.
+one to carry a different fingerprint? The answer depends entirely on *which*
+relaxation: some are invisible to a page and therefore free, others become a
+fingerprint difference immediately. This draws that line with numbers instead
+of assumptions.
 
-기준선은 뮬바드 기본값(RFP 잠금 + 레터박싱)이고, 나머지를 기준선과 견준다.
+The baseline is the shipped default (RFP locked, letterboxing on); everything
+else is compared against it.
 """
 import argparse, importlib.util, json, os, shutil, subprocess, sys, tempfile, time
 
@@ -19,16 +21,16 @@ _spec.loader.exec_module(drive)
 sys.path.insert(0, os.path.join(HERE, "..", "leakcheck"))
 import fpdiff
 
-# 프로필 폴더 이름 → autoconfig 안에서 고를 설정 이름
+# Profile directory name -> the configuration autoconfig selects.
 CONFIGS = ["base", "nolb", "persist", "norfp"]
 LABEL = {
-    "base":    "기준선 — 뮬바드 기본값 (RFP 잠금 + 레터박싱)",
-    "nolb":    "레터박싱만 끔 (RFP 는 그대로 잠김)",
-    "persist": "로그인·기록 유지 (RFP·레터박싱 그대로)",
-    "norfp":   "RFP 끔 + FPP 켬 (앞서 데일리로 재 본 것)",
+    "base":    "baseline — shipped default (RFP locked + letterboxing)",
+    "nolb":    "letterboxing off only (RFP still locked)",
+    "persist": "logins and history persist (RFP and letterboxing unchanged)",
+    "norfp":   "RFP off, FPP on",
 }
 
-MOZILLA_CFG = r'''// NMP autoconfig — 첫 줄은 반드시 주석
+MOZILLA_CFG = r'''// autoconfig — the first line must be a comment
 try {
   var name = "base";
   try {
@@ -38,7 +40,7 @@ try {
     var m = String(d.leafName).match(/nmp-([a-z]+)/);
     if (m) name = m[1];
   } catch (e) {}
-  lockPref("nmp.config", name);
+  lockPref("bbiwy.config", name);
 
   if (name === "norfp") {
     unlockPref("privacy.resistFingerprinting");
@@ -56,7 +58,8 @@ try {
   }
 
   if (name === "persist") {
-    // 「쓸 만함」의 대부분은 여기다 — 로그인이 남고, 기록이 남고, 나갈 때 안 지운다
+    // Most of what "usable" means lives here: logins persist, history persists,
+    // nothing is wiped on exit.
     lockPref("browser.privatebrowsing.autostart", false);
     lockPref("privacy.sanitize.sanitizeOnShutdown", false);
     lockPref("signon.rememberSignons", true);
@@ -70,7 +73,7 @@ LOCAL_SETTINGS = ('pref("general.config.filename", "mozilla.cfg");\n'
                   'pref("general.config.obscure_value", 0);\n'
                   'pref("general.config.sandbox_enabled", false);\n')
 
-WATCH = ["nmp.config", "privacy.resistFingerprinting",
+WATCH = ["bbiwy.config", "privacy.resistFingerprinting",
          "privacy.resistFingerprinting.letterboxing",
          "privacy.fingerprintingProtection",
          "browser.privatebrowsing.autostart", "signon.rememberSignons"]
@@ -81,7 +84,7 @@ def measure(binary, gecko, port, profdir):
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         if not drive.wait_port(port, 30):
-            return {"«오류»": "geckodriver 가 뜨지 않았습니다"}
+            return {"<error>": "geckodriver did not start"}
         wd = drive.WD(port)
         wd.start(binary, profdir)
         try:
@@ -113,7 +116,7 @@ def main():
     ls = os.path.join(lsd, "local-settings.js")
     open(cfg, "w").write(MOZILLA_CFG); open(ls, "w").write(LOCAL_SETTINGS)
 
-    root = tempfile.mkdtemp(prefix="nmp-fpcost-")
+    root = tempfile.mkdtemp(prefix="bbiwy-fpcost-")
     res = {}
     try:
         for i, name in enumerate(CONFIGS):
@@ -133,30 +136,30 @@ def main():
     keys = sorted(set().union(*[set(v) for v in flat.values()]))
     base = flat["base"]
 
-    print("\n=== 적용 확인 ===")
+    print("\n=== confirm the prefs took effect ===")
     for n in CONFIGS:
         p = res[n].get("prefs", {})
         def g(k):
             e = p.get(k, {}); 
-            return "%s[%s]" % (e.get("value"), "잠김" if e.get("locked") else "열림")
-        print("  %-8s RFP=%-11s LB=%-11s FPP=%-11s 사생활창=%s" % (
+            return "%s[%s]" % (e.get("value"), "locked" if e.get("locked") else "open")
+        print("  %-8s RFP=%-11s LB=%-11s FPP=%-11s private-window=%s" % (
             n, g("privacy.resistFingerprinting"),
             g("privacy.resistFingerprinting.letterboxing"),
             g("privacy.fingerprintingProtection"),
             g("browser.privatebrowsing.autostart")))
 
-    print("\n=== 기준선 대비 지문 차이 ===")
+    print("\n=== fingerprint difference against the baseline ===")
     for n in CONFIGS:
         if n == "base":
             continue
-        d = [(k, base.get(k, "«없음»"), flat[n].get(k, "«없음»"))
+        d = [(k, base.get(k, "<absent>"), flat[n].get(k, "<absent>"))
              for k in keys if k.split(".")[0] not in fpdiff.NOISY
-             and base.get(k, "«없음»") != flat[n].get(k, "«없음»")]
+             and base.get(k, "<absent>") != flat[n].get(k, "<absent>")]
         print("\n  ── %s" % LABEL[n])
         if not d:
-            print("     차이 0 — 지문으로는 기준선과 구별되지 않습니다.")
+            print("     zero differences — indistinguishable from the baseline.")
         for k, b, v in d:
-            print("     %-22s 기준선=%-30s → %s" % (k, str(b)[:30], str(v)[:34]))
+            print("     %-22s baseline=%-30s -> %s" % (k, str(b)[:30], str(v)[:34]))
 
 
 if __name__ == "__main__":

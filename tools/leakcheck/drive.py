@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""drive — geckodriver로 브라우저를 몰아 계측하는 하네스.
+"""drive — drive a real browser through geckodriver and measure it.
 
-세 가지를 잰다. 셋 다 눈으로는 안 보이는 것들이다.
+Three things, none of which are visible by looking:
 
-  잠금  : pref가 실제로 잠겼는가. Services.prefs.prefIsLocked 를 chrome 권한으로 물어본다.
-          user.js / policies.json / autoconfig 중 무엇이 먹는지가 여기서 갈린다.
-  누수  : 확장이 browser.dns.resolve 를 부르면 프록시를 우회하는가.
-          판정은 이 프로그램이 아니라 격리망 계수기가 한다 — 여기서는 유발만 한다.
-  지문  : content 권한에서 보이는 표면을 JSON으로 뽑는다. 프로필 간·판올림 간 diff 용.
+  locks        whether a pref is genuinely locked. Asks Services.prefs.prefIsLocked
+               from chrome scope — the only honest way to ask. This is what
+               separates user.js from policies.json from autoconfig.
+  leaks        whether an extension calling browser.dns.resolve bypasses the proxy.
+               The verdict belongs to the namespace counters, not to this program;
+               here we only provoke.
+  fingerprint  dumps the surface a page can actually see, for diffing across
+               profiles and across browser versions.
 
-표준 라이브러리만 쓴다. selenium을 넣으면 그 버전이 또 하나의 변수가 된다.
+Standard library only. Adding selenium would make its version one more variable.
 """
 import argparse, json, os, socket, subprocess, sys, time, urllib.request
 
@@ -71,7 +74,7 @@ class WD:
             except Exception:
                 pass
 
-# chrome 권한에서 도는 조각. 잠금 여부는 이 경로로만 정직하게 물어볼 수 있다.
+# Runs in chrome scope. Lock state can only be asked honestly from here.
 PREF_DUMP = """
 const names = arguments[0];
 const out = {};
@@ -81,7 +84,7 @@ for (const n of names) {
     if (type === Services.prefs.PREF_BOOL) v = Services.prefs.getBoolPref(n);
     else if (type === Services.prefs.PREF_INT) v = Services.prefs.getIntPref(n);
     else if (type === Services.prefs.PREF_STRING) v = Services.prefs.getStringPref(n);
-  } catch (e) { v = "«읽기실패»"; }
+  } catch (e) { v = "<unreadable>"; }
   out[n] = {
     value: v,
     locked: Services.prefs.prefIsLocked(n),
@@ -89,14 +92,14 @@ for (const n of names) {
     exists: type !== Services.prefs.PREF_INVALID,
   };
 }
-out["«정책»"] = {
+out["<policies>"] = {
   policiesActive: !!(Services.policies && Services.policies.status),
   status: Services.policies ? Services.policies.status : null,
 };
 return out;
 """
 
-# content 권한. 페이지가 실제로 볼 수 있는 것만 담는다.
+# Content scope. Only what a page can actually see.
 FP_DUMP = """
 const n = navigator, s = screen;
 function safe(f, d) { try { return f(); } catch (e) { return d; } }
@@ -138,8 +141,9 @@ return {
 };
 """
 
-# uBO의 CNAME 언클로킹이 내려가는 바로 그 경로다. 확장을 거치지 않고 같은 것을 부른다.
-# 결과값은 중요하지 않다 — 판정은 격리망 계수기가 한다. 여기서는 유발만 하면 된다.
+# The exact path an ad blocker's CNAME uncloaking takes, called directly rather
+# than through an extension. The return value does not matter: the namespace
+# counters deliver the verdict. This only has to provoke.
 DNS_PROBE = """
 const done = arguments[arguments.length - 1];
 const hosts = ["example.com", "cname-probe.nmp.invalid", "mozilla.org"];
@@ -161,9 +165,10 @@ for (const h of hosts) {
 setTimeout(() => done(log), 8000);
 """
 
-# Mullvad Browser 는 WebRTC 를 켠 채 ICE 를 조여 둔다(relay_only · proxy_only_if_behind_proxy).
-# 그 조임이 실제로 프록시를 지키는지는 후보 수집을 시켜 보면 안다. 나가려는 시도 자체가
-# 격리망 계수기에 잡히므로, 밖에 닿지 않아도 판정이 선다.
+# The base leaves WebRTC on and tightens ICE instead (relay_only,
+# proxy_only_if_behind_proxy). Whether that actually holds the proxy is answered
+# by making it gather candidates: the attempt itself is counted, so a verdict
+# stands even if nothing reaches the outside.
 WEBRTC_PROBE = """
 const done = arguments[arguments.length - 1];
 const out = {candidates: [], errors: [], state: null};
@@ -174,7 +179,7 @@ try {
   });
   pc.onicecandidate = (e) => {
     if (e.candidate) out.candidates.push(e.candidate.candidate);
-    else { out.state = "완료"; done(out); }
+    else { out.state = "complete"; done(out); }
   };
   pc.createDataChannel("nmp");
   pc.createOffer().then((o) => pc.setLocalDescription(o))
@@ -183,7 +188,7 @@ try {
   out.errors.push(String(e));
   done(out);
 }
-setTimeout(() => { out.state = "시간초과"; done(out); }, 12000);
+setTimeout(() => { out.state = "timed out"; done(out); }, 12000);
 """
 
 WATCHED = [
@@ -212,14 +217,14 @@ def main():
     ap.add_argument("--profile", required=True)
     ap.add_argument("--geckodriver", required=True)
     ap.add_argument("--port", type=int, default=4444)
-    ap.add_argument("--addon", help="임시 설치할 확장 (xpi 또는 폴더)")
+    ap.add_argument("--addon", help="extension to install temporarily (xpi or directory)")
     ap.add_argument("--url", default="about:blank")
-    ap.add_argument("--out", help="결과 JSON 경로")
-    ap.add_argument("--hold", type=float, default=6.0, help="측정 후 머무는 시간(초)")
+    ap.add_argument("--out", help="where to write the result JSON")
+    ap.add_argument("--hold", type=float, default=6.0, help="seconds to linger after measuring")
     ap.add_argument("--webrtc-probe", action="store_true",
-                    help="WebRTC 후보 수집을 시켜 ICE 가 프록시를 지키는지 재는 유발을 한다")
+                    help="gather WebRTC candidates, to test whether ICE holds the proxy")
     ap.add_argument("--dns-probe", action="store_true",
-                    help="chrome 권한에서 nsIDNSService를 직접 불러 누수를 유발한다")
+                    help="call nsIDNSService directly from chrome scope to provoke a leak")
     a = ap.parse_args()
 
     gd = subprocess.Popen([a.geckodriver, "--port", str(a.port), "--log", "error"],
@@ -228,7 +233,7 @@ def main():
     wd = WD(a.port)
     try:
         if not wait_port(a.port):
-            sys.exit("geckodriver 가 뜨지 않았습니다")
+            sys.exit("geckodriver did not start")
         wd.start(a.binary, a.profile)
 
         wd.ctx("chrome")
@@ -239,7 +244,7 @@ def main():
                 wd.ctx("content")
                 out["addon"] = wd.install(a.addon, temporary=True)
             except Exception as e:
-                out["errors"].append("확장 설치 실패: %s" % e)
+                out["errors"].append("extension install failed: %s" % e)
 
         wd.ctx("content")
         wd.go(a.url)
@@ -247,16 +252,16 @@ def main():
         try:
             out["fingerprint"] = wd.script(FP_DUMP)
         except Exception as e:
-            out["errors"].append("지문 수집 실패: %s" % e)
+            out["errors"].append("fingerprint dump failed: %s" % e)
 
         if a.webrtc_probe:
             try:
                 wd.ctx("content")
                 wd._req("POST", "/session/%s/timeouts" % wd.sid, {"script timeout": 30000})
-                wd.go("data:text/html,<title>rtc</title>")  # about: 페이지에서는 RTC 를 못 만든다
+                wd.go("data:text/html,<title>rtc</title>")  # RTC cannot be constructed on about: pages
                 out["webrtc"] = wd.script_async(WEBRTC_PROBE)
             except Exception as e:
-                out["errors"].append("WebRTC 유발 실패: %s" % e)
+                out["errors"].append("WebRTC probe failed: %s" % e)
 
         if a.dns_probe:
             try:
@@ -265,9 +270,9 @@ def main():
                 wd._req("POST", "/session/%s/timeouts" % wd.sid, self_to)
                 out["dns_probe"] = wd.script_async(DNS_PROBE)
             except Exception as e:
-                out["errors"].append("DNS 유발 실패: %s" % e)
+                out["errors"].append("DNS probe failed: %s" % e)
 
-        time.sleep(a.hold)   # 확장이 이름을 풀 시간을 준다
+        time.sleep(a.hold)   # give the extension time to resolve
     finally:
         wd.quit()
         gd.terminate()
@@ -280,29 +285,29 @@ def main():
     if a.out:
         with open(a.out, "w") as f:
             f.write(text)
-        print("기록: %s" % a.out)
+        print("wrote: %s" % a.out)
     p = out["prefs"] or {}
-    print("%-46s %-14s %-6s %s" % ("설정", "값", "잠김", "사용자값"))
+    print("%-46s %-14s %-6s %s" % ("pref", "value", "locked", "user-set"))
     for k in WATCHED:
         d = p.get(k)
         if not d:
             continue
         print("%-46s %-14s %-6s %s" % (k, str(d["value"])[:14],
-                                       "예" if d["locked"] else "아니오",
-                                       "예" if d["userSet"] else "아니오"))
-    if "«정책»" in p:
-        print("\n정책 활성: %s" % p["«정책»"])
+                                       "yes" if d["locked"] else "no",
+                                       "yes" if d["userSet"] else "no"))
+    if "<policies>" in p:
+        print("\npolicies active: %s" % p["<policies>"])
     if out.get("webrtc") is not None:
         w = out["webrtc"]
-        print("\nWebRTC 후보 %d개 · 상태 %s" % (len(w.get("candidates", [])), w.get("state")))
+        print("\nWebRTC candidates: %d · state %s" % (len(w.get("candidates", [])), w.get("state")))
         for c in w.get("candidates", [])[:8]:
             print("  %s" % c)
         for e in w.get("errors", []):
-            print("  오류: %s" % e)
+            print("  error: %s" % e)
     if out.get("dns_probe") is not None:
-        print("\nnsIDNSService 직접 호출 결과: %s" % json.dumps(out["dns_probe"], ensure_ascii=False))
+        print("\ndirect nsIDNSService call: %s" % json.dumps(out["dns_probe"], ensure_ascii=False))
     for e in out["errors"]:
-        print("오류: %s" % e)
+        print("error: %s" % e)
 
 
 if __name__ == "__main__":

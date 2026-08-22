@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""fpsplit — 오너가 정한 4:1 지문 분리가 실제로 일어나는지 잰다.
+"""fpsplit — does the fingerprint actually split the way the design says?
 
-규칙(오너 2026-08-22): 프라이버시 프로필 4개는 지문을 통일하고, 데일리 프로필
-1개만 별도 지문을 갖는다.
+This harness dates from an earlier design in which four privacy profiles shared
+a fingerprint and the daily profile had its own. That design was later changed —
+see fpcost.py, which measured that the split costs more than it buys — but the
+two properties this checks are still the right ones to check.
 
-여기서 재는 것은 두 가지다.
-  통일  : 프라이버시 4개 사이의 지문 차이가 0인가.
-  분리  : 데일리가 그 넷과 실제로 다른가. (다르지 않으면 데일리를 만든 의미가 없다)
+It measures two things:
+  unified    do the privacy profiles differ by nothing?
+  separated  is the daily profile genuinely different from them? (If not, there
+             was no point building it separately.)
 
-분기는 환경변수가 아니라 **실행 중인 프로필의 실제 경로**로 한다. 환경변수는 사용자가
-위조할 수 있어서 잠금의 뜻이 사라진다. 실측 11 참조.
+Branching is on the *running profile's actual path*, not on an environment
+variable: a user can set a variable, and a lock a user can lift is not a lock.
 """
 import argparse, importlib.util, json, os, shutil, subprocess, sys, tempfile, time
 
@@ -25,8 +28,8 @@ import fpdiff
 PROFILES = ["daily", "hardened", "tor", "i2p", "session"]
 PRIVACY = ["hardened", "tor", "i2p", "session"]
 
-# 실행 중인 프로필 경로의 마지막 조각으로 부류를 정한다.
-MOZILLA_CFG = r'''// NMP autoconfig — 첫 줄은 반드시 주석
+# The class is decided by the last component of the running profile path.
+MOZILLA_CFG = r'''// autoconfig — the first line must be a comment
 try {
   var klass = "privacy";
   try {
@@ -36,8 +39,8 @@ try {
     if (/(^|[\/\-])daily([\-\.]|$)/.test(String(d.leafName))) klass = "daily";
     lockPref("nmp.profile.path", String(d.path));
   } catch (e) {
-    // 경로를 못 읽으면 가장 안전한 쪽으로 떨어진다 — 프라이버시로 잠근다.
-    lockPref("nmp.profile.path", "«실패»");
+    // If the path cannot be read, fall to the safe side and lock as privacy.
+    lockPref("bbiwy.profile.path", "<failed>");
   }
   lockPref("nmp.profile.class", klass);
 
@@ -78,7 +81,7 @@ def measure(binary, gecko, port, profdir):
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         if not drive.wait_port(port, 30):
-            return {"«오류»": "geckodriver 가 뜨지 않았습니다"}
+            return {"<error>": "geckodriver did not start"}
         wd = drive.WD(port)
         wd.start(binary, profdir)
         try:
@@ -107,7 +110,7 @@ def main():
 
     browser_dir = os.path.dirname(os.path.abspath(a.binary))
     made = install_autoconfig(browser_dir)
-    root = tempfile.mkdtemp(prefix="nmp-fpsplit-")
+    root = tempfile.mkdtemp(prefix="bbiwy-fpsplit-")
     results = {}
     try:
         for i, name in enumerate(PROFILES):
@@ -124,52 +127,52 @@ def main():
 
     json.dump(results, open(a.out, "w"), ensure_ascii=False, indent=2)
 
-    # ── 판정 ────────────────────────────────────────────────
+    # ── verdict ─────────────────────────────────────────────
     flat = {n: fpdiff.flat(results[n].get("fingerprint")) for n in results}
     keys = sorted(set().union(*[set(v) for v in flat.values()]))
 
-    print("\n=== 잠금 상태 ===")
+    print("\n=== lock state ===")
     for n in PROFILES:
         p = results[n].get("prefs", {})
         rfp = p.get("privacy.resistFingerprinting", {})
         fpp = p.get("privacy.fingerprintingProtection", {})
         print("  %-9s class=%-8s RFP=%-5s[%s]  FPP=%-5s[%s]" % (
             n, p.get("nmp.profile.class", {}).get("value"),
-            rfp.get("value"), "잠김" if rfp.get("locked") else "열림",
-            fpp.get("value"), "잠김" if fpp.get("locked") else "열림"))
+            rfp.get("value"), "locked" if rfp.get("locked") else "open",
+            fpp.get("value"), "locked" if fpp.get("locked") else "open"))
 
-    print("\n=== 통일: 프라이버시 4개 사이의 차이 ===")
+    print("\n=== unified: differences among the privacy profiles ===")
     unified_break = []
     for k in keys:
         if k.split(".")[0] in fpdiff.NOISY:
             continue
-        vals = {flat[n].get(k, "«없음»") for n in PRIVACY}
+        vals = {flat[n].get(k, "<absent>") for n in PRIVACY}
         if len(vals) > 1:
             unified_break.append((k, {n: flat[n].get(k) for n in PRIVACY}))
     if not unified_break:
-        print("  차이 0 — 프라이버시 4개는 구별되지 않습니다.")
+        print("  zero differences — they cannot be told apart.")
     else:
         for k, v in unified_break:
             print("  ⛔ %s → %s" % (k, v))
 
-    print("\n=== 분리: 데일리가 프라이버시와 다른 항목 ===")
+    print("\n=== separated: where daily differs ===")
     sep = []
     for k in keys:
         if k.split(".")[0] in fpdiff.NOISY:
             continue
-        base = flat["hardened"].get(k, "«없음»")
-        d = flat["daily"].get(k, "«없음»")
+        base = flat["hardened"].get(k, "<absent>")
+        d = flat["daily"].get(k, "<absent>")
         if base != d:
             sep.append((k, base, d))
     if not sep:
-        print("  ⛔ 차이 0 — 데일리를 따로 만든 의미가 없습니다.")
+        print("  zero differences — building daily separately bought nothing.")
     else:
         for k, b, d in sep:
-            print("  %-28s 프라이버시=%s  데일리=%s" % (k, str(b)[:34], str(d)[:34]))
+            print("  %-28s privacy=%s  daily=%s" % (k, str(b)[:34], str(d)[:34]))
 
-    print("\n=== 판정 ===")
-    print("  통일(프라이버시 4개 차이 0): %s" % ("통과" if not unified_break else "실패"))
-    print("  분리(데일리가 실제로 다름): %s" % ("통과" if sep else "실패"))
+    print("\n=== verdict ===")
+    print("  unified   (privacy profiles identical): %s" % ("pass" if not unified_break else "FAIL"))
+    print("  separated (daily genuinely differs):   %s" % ("pass" if sep else "FAIL"))
 
 
 if __name__ == "__main__":

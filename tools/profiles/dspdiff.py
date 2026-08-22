@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""dspdiff — 같은 프로필을 X11 과 웨이랜드에서 각각 띄워 지문을 견준다.
+"""dspdiff — run the same profile under X11 and under Wayland, and compare.
 
-오너 질문(2026-08-22): 웨이랜드를 쓰면서도 지문이 통일되게 할 수 없나.
+Can Wayland be supported without splitting the fingerprint?
 
-Tor 가 웨이랜드를 끈 이유는 「샌다」가 아니라 「안 재 봤다」였다. 결정 코멘트 원문이
+Upstream disabled Wayland not because of a known leak but because, in the words
 "We don't really have any fingerprinting insight into the difference between wayland
-and non-wayland" 이다. 그래서 잰다.
+and non-wayland". That is an absence of measurement, so: measure it.
 
-차이가 0 이면 웨이랜드를 요구하지도 금지하지도 않고 둘 다 허용할 수 있다.
-0 이 아니면 어느 항목인지 정확히 알게 된다.
+If the difference is zero, Wayland need be neither required nor forbidden.
+If it is not, this says exactly which items are responsible.
 """
 import argparse, importlib.util, json, os, shutil, signal, subprocess, sys, tempfile, time
 
@@ -20,7 +20,7 @@ import fpdiff
 
 W, H = 1400, 900
 
-CFG = '''// NMP — 두 실행에 완전히 같은 잠금을 건다
+CFG = '''// identical locks for both runs
 try {
   lockPref("privacy.resistFingerprinting", true);
   lockPref("privacy.resistFingerprinting.letterboxing", true);
@@ -45,7 +45,7 @@ return {
 """
 
 def measure(binary, gecko, port, env, label):
-    prof = tempfile.mkdtemp(prefix="nmp-%s-" % label)
+    prof = tempfile.mkdtemp(prefix="bbiwy-%s-" % label)
     e = dict(os.environ); e.update(env)
     for k in ("DISPLAY", "WAYLAND_DISPLAY"):
         if k in env and env[k] is None:
@@ -55,7 +55,7 @@ def measure(binary, gecko, port, env, label):
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=e)
     try:
         if not drive.wait_port(port, 30):
-            return {"«오류»": "geckodriver 미기동"}
+            return {"<error>": "geckodriver did not start"}
         wd = drive.WD(port); wd.start(binary, prof)
         try:
             wd._req("POST", "/session/%s/window/rect" % wd.sid,
@@ -87,31 +87,31 @@ def main():
 
     res = {}
     try:
-        # ── X11 (Xvfb 는 바깥에서 xvfb-run 이 띄운다)
+        # ── X11 (Xvfb is started outside, by xvfb-run)
         print("── X11", flush=True)
         res["x11"] = measure(a.binary, a.geckodriver, a.port,
                              {"MOZ_ENABLE_WAYLAND": "0", "WAYLAND_DISPLAY": None}, "x11")
 
-        # ── 웨이랜드 (weston 헤드리스)
-        print("── 웨이랜드 (weston 헤드리스)", flush=True)
+        # ── Wayland (headless weston)
+        print("── Wayland (headless weston)", flush=True)
         rt = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid()
         os.makedirs(rt, exist_ok=True); os.chmod(rt, 0o700)
         wl = subprocess.Popen(
             ["weston", "--backend=headless", "--width=%d" % W, "--height=%d" % H,
-             "--socket=wayland-nmp", "--idle-time=0"],
+             "--socket=wayland-bbiwy", "--idle-time=0"],
             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
             env=dict(os.environ, XDG_RUNTIME_DIR=rt))
         try:
-            sock = os.path.join(rt, "wayland-nmp")
+            sock = os.path.join(rt, "wayland-bbiwy")
             for _ in range(120):
                 if os.path.exists(sock): break
                 time.sleep(0.25)
             if not os.path.exists(sock):
-                res["wayland"] = {"«오류»": "weston 소켓이 안 생겼습니다: %s" % sock}
+                res["wayland"] = {"<error>": "weston socket never appeared: %s" % sock}
             else:
                 res["wayland"] = measure(a.binary, a.geckodriver, a.port + 1,
                                          {"MOZ_ENABLE_WAYLAND": "1",
-                                          "WAYLAND_DISPLAY": "wayland-nmp",
+                                          "WAYLAND_DISPLAY": "wayland-bbiwy",
                                           "XDG_RUNTIME_DIR": rt,
                                           "DISPLAY": None}, "wl")
         finally:
@@ -124,21 +124,21 @@ def main():
             except OSError: pass
 
     json.dump(res, open(a.out, "w"), ensure_ascii=False, indent=2)
-    if any("«오류»" in v for v in res.values()):
+    if any("<error>" in v for v in res.values()):
         for k, v in res.items():
-            if "«오류»" in v: print("  %s: %s" % (k, v["«오류»"]))
+            if "<error>" in v: print("  %s: %s" % (k, v["<error>"]))
         return
     flat = {k: fpdiff.flat(v.get("fingerprint")) for k, v in res.items()}
     keys = sorted(set(flat["x11"]) | set(flat["wayland"]))
-    diff = [(k, flat["x11"].get(k, "«없음»"), flat["wayland"].get(k, "«없음»"))
+    diff = [(k, flat["x11"].get(k, "<absent>"), flat["wayland"].get(k, "<absent>"))
             for k in keys if k.split(".")[0] not in fpdiff.NOISY
-            and flat["x11"].get(k, "«없음»") != flat["wayland"].get(k, "«없음»")]
-    print("\n=== X11 대 웨이랜드 — 지문 차이 ===")
+            and flat["x11"].get(k, "<absent>") != flat["wayland"].get(k, "<absent>")]
+    print("\n=== X11 vs Wayland — fingerprint difference ===")
     if not diff:
-        print("  차이 0 — 페이지는 두 표시서버를 구별하지 못합니다.")
+        print("  zero differences — a page cannot tell the display servers apart.")
     for k, x, w in diff:
-        print("  %-22s X11=%-30s 웨이랜드=%s" % (k, str(x)[:30], str(w)[:34]))
-    print("\n항목 %d개 중 %d개 다름" % (len(keys), len(diff)))
+        print("  %-22s X11=%-30s wayland=%s" % (k, str(x)[:30], str(w)[:34]))
+    print("\n%d of %d items differ" % (len(diff), len(keys)))
 
 if __name__ == "__main__":
     main()

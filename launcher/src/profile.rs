@@ -1,92 +1,90 @@
-//! 프로필 정의.
+//! Profile definitions.
 //!
-//! ⭐**여기가 경로 의존성이 모이는 유일한 곳이다**(오너 2026-08-22: "모든 코드에서
-//! 경로 의존성을 최소화한다"). Tor 를 C tor 에서 Arti 로 갈아타거나 Session Router
-//! 를 붙일 때 고치는 곳은 이 표 하나여야 하고, 나머지 코드는 `Transport` 만 본다.
+//! **This is the only place transport knowledge lives.** Swapping the Tor
+//! implementation, or adding Session Router, should mean editing this table and
+//! nothing else; the rest of the code only ever sees a `Transport`.
 
-/// 브라우저가 바깥으로 나가는 방법.
+/// How a profile reaches the outside.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Transport {
-    /// 직접 나간다. 프록시 없음.
+    /// Straight out. No proxy.
     Direct,
-    /// SOCKS5 프록시. (호스트 포트)
+    /// SOCKS5 proxy on this local port.
     Socks5(u16),
-    /// HTTP 프록시. (호스트 포트)
+    /// HTTP proxy on this local port.
     Http(u16),
 }
 
-/// 지문 방어 등급. 오너 결정(2026-08-22): **다섯 프로필이 지문을 하나로 통일한다.**
-/// 데일리와 하드닝의 차이는 「엄격함」이지 지문 정체성이 아니다. (실측 13)
+/// How strict a profile is. Note this is *not* a fingerprint setting:
+/// all five profiles share one fingerprint. Keeping logins, history and
+/// autofill was measured to cost zero fingerprint difference, so there is no
+/// reason to split the anonymity set over convenience.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Strictness {
-    /// 로그인·기록이 남는다. 레터박싱은 켜져 있지만 경고 후 끌 수 있다.
-    /// 지문은 다른 넷과 **똑같다** — 실측 13에서 이 완화들의 지문 차이가 0이었다.
+    /// Logins and history persist. Letterboxing is on, but can be turned off
+    /// after a warning that says exactly what it leaks.
     Daily,
-    /// 나갈 때 전부 지운다. 레터박싱 강제.
+    /// Nothing persists. Letterboxing enforced.
     Hardened,
 }
 
 pub struct Profile {
     pub name: &'static str,
-    pub label: &'static str,
-    /// 화면에 띄우는 글리프. 창이 겹쳐 있을 때 1px 만 보고도 알아야 한다.
-    pub glyph: &'static str,
     pub transport: Transport,
     pub strictness: Strictness,
-    /// 이 경로에서만 뜻이 있는 최상위 도메인. 없으면 일반 웹.
+    /// The suffix that only means something on this route.
     pub suffix: Option<&'static str>,
-    /// 아직 만들지 않은 경로인가. v1 순서는 네이티브 → Tor → I2P → Session.
+    /// A mark distinct enough to identify a window from one pixel of its edge.
+    pub glyph: &'static str,
+    /// Whether this route is built yet. Order is native → Tor → I2P → Session.
     pub ready: bool,
 }
 
 pub const PROFILES: &[Profile] = &[
     Profile {
         name: "daily",
-        label: "일상",
-        glyph: "●",
         transport: Transport::Direct,
         strictness: Strictness::Daily,
         suffix: None,
+        glyph: "●",
         ready: true,
     },
     Profile {
         name: "hardened",
-        label: "강화",
-        glyph: "○",
         transport: Transport::Direct,
         strictness: Strictness::Hardened,
         suffix: None,
+        glyph: "○",
         ready: true,
     },
     Profile {
         name: "tor",
-        label: "Tor",
-        glyph: "◎",
-        // v1 은 C tor 다(오너 결정). Arti 로 갈아타도 이 한 줄만 바뀐다.
+        // C tor for v1. Arti later — and when that happens, this line is the
+        // only one that changes.
         transport: Transport::Socks5(9150),
         strictness: Strictness::Hardened,
         suffix: Some(".onion"),
+        glyph: "◎",
         ready: false,
     },
     Profile {
         name: "i2p",
-        label: "I2P",
-        glyph: "◆",
-        // 4447 이 아니라 4444 다. 4447 은 SOCKS 이고 I2P 프로젝트는 HTTP 를 권한다.
+        // 4444, not 4447. 4447 is the SOCKS port; the I2P project recommends
+        // the HTTP proxy.
         transport: Transport::Http(4444),
         strictness: Strictness::Hardened,
         suffix: Some(".i2p"),
+        glyph: "◆",
         ready: false,
     },
     Profile {
         name: "session",
-        label: "Session",
-        glyph: "⬡",
-        // 아직 자리만 잡아 둔다. 상류에 SOCKS 가 없어서 PR #51 이 병합되면
-        // 그 위에 얇은 SOCKS 껍데기를 얹는 것이 계획이다.
+        // Reserved. Upstream has no SOCKS listener at all; the plan is a thin
+        // SOCKS5 shim once the embedded TCP tunnel work lands.
         transport: Transport::Socks5(1080),
         strictness: Strictness::Hardened,
         suffix: Some(".sesh"),
+        glyph: "⬡",
         ready: false,
     },
 ];
@@ -96,18 +94,26 @@ pub fn find(name: &str) -> Option<&'static Profile> {
 }
 
 impl Profile {
-    /// 격리망 안에서 **바깥으로 나갈 수 있는 유일한 포트**.
-    /// `None` 이면 직접 연결이므로 일반 웹 포트를 연다.
+    /// The one port this profile may reach. `None` means a direct connection,
+    /// so ordinary web ports are opened instead.
     pub fn relay_port(&self) -> Option<u16> {
         match self.transport {
             Transport::Direct => None,
             Transport::Socks5(p) | Transport::Http(p) => Some(p),
         }
     }
+
+    pub fn route(&self) -> String {
+        match self.transport {
+            Transport::Direct => "direct".to_string(),
+            Transport::Socks5(p) => format!("SOCKS5 {p}"),
+            Transport::Http(p) => format!("HTTP proxy {p}"),
+        }
+    }
 }
 
-/// 한글·한자는 터미널에서 두 칸을 차지한다. `{:<20}` 은 글자 수만 세므로
-/// 그대로 쓰면 표가 어긋난다. 실제 표시 폭으로 채운다.
+/// CJK characters occupy two terminal columns. `{:<20}` counts characters, so
+/// using it directly misaligns any table containing them.
 pub fn pad(s: &str, width: usize) -> String {
     let w: usize = s.chars().map(char_width).sum();
     let mut out = s.to_string();
@@ -119,7 +125,6 @@ pub fn pad(s: &str, width: usize) -> String {
 
 fn char_width(c: char) -> usize {
     match c as u32 {
-        // 한글 · CJK · 전각 기호
         0x1100..=0x115F
         | 0x2E80..=0xA4CF
         | 0xAC00..=0xD7A3
@@ -133,24 +138,27 @@ fn char_width(c: char) -> usize {
 }
 
 pub fn list() -> Result<(), String> {
-    println!("  {} {} {} {}  {}", pad("프로필", 20), pad("경로", 17), pad("전용주소", 9), pad("상태", 13), "표시");
-    println!("  ──────────────────────────────────────────────────────────────────");
+    println!(
+        "  {} {} {} {}  {}",
+        pad("PROFILE", 12),
+        pad("ROUTE", 17),
+        pad("SUFFIX", 9),
+        pad("STATE", 14),
+        "MARK"
+    );
+    println!("  ────────────────────────────────────────────────────────────");
     for p in PROFILES {
-        let route = match p.transport {
-            Transport::Direct => "직접 연결".to_string(),
-            Transport::Socks5(port) => format!("SOCKS5 {port}"),
-            Transport::Http(port) => format!("HTTP 프록시 {port}"),
-        };
         println!(
             "  {} {} {} {}  {}",
-            pad(&format!("{} ({})", p.name, p.label), 20),
-            pad(&route, 17),
+            pad(p.name, 12),
+            pad(&p.route(), 17),
             pad(p.suffix.unwrap_or("—"), 9),
-            pad(if p.ready { "준비됨" } else { "아직 안 만듦" }, 13),
+            pad(if p.ready { "ready" } else { "not built yet" }, 14),
             p.glyph
         );
     }
     println!();
-    println!("다섯 프로필은 지문을 하나로 통일합니다. 차이는 엄격함이지 정체성이 아닙니다.");
+    println!("All five profiles share one fingerprint. The difference is strictness,");
+    println!("not identity.");
     Ok(())
 }

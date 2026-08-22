@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "nmp-fake-transport"
+name = "bbiwy-fake-transport"
 version = "0.1.0"

@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "nmp-dnsprobe",
   "version": "1.0",
-  "description": "uBO의 CNAME 언클로킹과 같은 경로로 이름을 푼다. 이것이 프록시를 우회하는지 재는 시험용.",
+  "description": "Resolves names through the same path an ad blocker uses for CNAME uncloaking, to measure whether that bypasses the proxy.",
   "permissions": ["dns", "webRequest", "webRequestBlocking", "<all_urls>"],
   "browser_specific_settings": { "gecko": { "id": "dnsprobe@nmp.test" } },
   "background": { "scripts": ["bg.js"] }

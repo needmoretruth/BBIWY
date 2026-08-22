@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""레터박싱 판별 시험 — 창을 격자에서 벗어난 크기로 바꾼 뒤 페이지가 보는 값을 읽는다.
+"""Letterboxing, tested so that it can actually fail.
 
-레터박싱은 창 크기를 격자에 맞추는 장치다. 창을 안 건드리면 아무 일도 안 하므로,
-앞선 시험처럼 고정 크기로만 재면 「차이 0」이 나올 수밖에 없다. 그건 판별력이 없다.
+Letterboxing snaps the window to a grid. It does nothing at all unless the
+window is resized, so measuring at a fixed size can only ever report "no
 
-여기서는 창을 1123x777 같은 어중간한 크기로 바꾼다. 레터박싱이 켜져 있으면 페이지가
-보는 값은 격자 위 값으로 떨어지고, 꺼져 있으면 어중간한 값이 그대로 보인다.
+difference" — a result with no discriminating power whatsoever.
+
+Here the window is set to awkward sizes such as 1123x777. With letterboxing on,
+the page sees a grid value. With it off, it sees the awkward number itself.
 """
 import importlib.util, json, os, subprocess, sys, tempfile, time, shutil
 
@@ -13,8 +15,8 @@ HERE = os.environ.get("BBIWY_TOOLS", os.path.dirname(os.path.dirname(os.path.abs
 _s = importlib.util.spec_from_file_location("drive", os.path.join(HERE, "leakcheck", "drive.py"))
 drive = importlib.util.module_from_spec(_s); _s.loader.exec_module(drive)
 
-BIN = os.environ["BBIWY_BROWSER"]   # 브라우저 실행파일 경로
-GD  = os.environ["BBIWY_GECKODRIVER"]  # geckodriver 경로
+BIN = os.environ["BBIWY_BROWSER"]      # browser binary
+GD  = os.environ["BBIWY_GECKODRIVER"]  # geckodriver binary
 BDIR = os.path.dirname(BIN)
 
 CFG = '''// NMP
@@ -78,13 +80,13 @@ finally:
         try: os.remove(f)
         except OSError: pass
 
-print("\n%-16s | %-28s | %-28s" % ("요청한 창 크기", "레터박싱 켬 → 페이지가 본 값", "레터박싱 끔 → 페이지가 본 값"))
+print("\n%-16s | %-28s | %-28s" % ("window asked for", "letterboxing ON, page sees", "letterboxing OFF, page sees"))
 print("-"*80)
 for i, (sz, _) in enumerate(res["on"]):
     a = res["on"][i][1]; b = res["off"][i][1]
     print("%-16s | inner=%-21s | inner=%-21s" % (str(sz), a["inner"], b["inner"]))
     print("%-16s | screen=%-20s | screen=%-20s" % ("", a["screen"][:2], b["screen"][:2]))
 same = all(res["on"][i][1]["inner"] == res["off"][i][1]["inner"] for i in range(len(SIZES)))
-print("\n판정: 레터박싱 켬/끔이 페이지가 보는 값에 %s" % ("영향 없음" if same else "⚠ 영향 있음"))
+print("\nverdict: letterboxing %s what the page sees" % ("does not change" if same else "CHANGES"))
 grid = all(w % 50 == 0 and h % 50 == 0 for _, r in res["on"] for w, h in [r["inner"]])
-print("      레터박싱 켬일 때 값이 50 격자 위인가: %s" % ("예" if grid else "아니오"))
+print("         with it on, values land on the 50px grid: %s" % ("yes" if grid else "no"))

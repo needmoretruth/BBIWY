@@ -1,6 +1,6 @@
-// uBO가 "Uncloak canonical names"에서 하는 것과 같은 호출을 한다.
-// 이 호출이 nsIDNSService로 내려가고, 그것이 SOCKS를 우회한다는 것이 문서의 주장이다.
-// 우회하면 격리망 계수기의 dns_udp 가 올라간다. 안 올라가면 주장이 이 설정에서는 틀린 것이다.
+// Makes the same call an ad blocker makes when uncloaking canonical names.
+// The claim under test is that this reaches nsIDNSService and bypasses SOCKS.
+// If it does, the dns_udp counter moves. If it does not, the claim is false here.
 const results = [];
 
 async function probe(host, flags) {
@@ -14,12 +14,13 @@ async function probe(host, flags) {
 }
 
 (async () => {
-  // uBO는 canonical_name 플래그를 쓴다. 평범한 해석도 함께 재서 차이를 본다.
+  // Ad blockers pass the canonical_name flag; a plain lookup is measured too,
+  // so the difference between the two is visible.
   await probe("example.com", ["canonical_name"]);
   await probe("cname-test.nmp.invalid", ["canonical_name"]);
   await probe("mozilla.org", []);
   await probe("example.com", ["disable_ipv6", "canonical_name"]);
-  // 결과를 페이지에서 읽을 수 있게 남긴다.
+  // Leave the result somewhere the page can read it.
   await browser.storage.local.set({ nmpDnsProbe: results });
   console.log("NMP_DNSPROBE " + JSON.stringify(results));
 })();

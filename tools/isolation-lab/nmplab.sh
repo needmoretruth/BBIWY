@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
-# nmplab — NMP 격리 실험대.
+# nmplab — the isolation lab.
 #
-# 하나의 브라우저 프로필을 network namespace 안에 가두고, 거기서 나가려는 모든
-# 패킷을 화이트리스트로 판정한다. 허용은 단 하나 — 지정한 릴레이 포트로 가는 TCP.
-# 그 외 전부 위반으로 세고, 기록하고, 버린다.
+# Confines one browser profile to a network namespace and judges every packet
+# that tries to leave against an allow-list. Exactly one thing passes: TCP to
+# the nominated relay port. Everything else is counted as a violation and dropped.
 #
-# 이 하네스가 브라우저 pref보다 아래층에 있다는 점이 핵심이다. pref를 우회하는
-# 구성요소(uBO의 browser.dns.resolve 같은 것)도 여기서는 못 빠져나간다.
+# The point is that this sits *below* the browser's preferences. A component
+# that bypasses those preferences still cannot get out through here.
 #
-#   nmplab.sh up   <이름> <릴레이포트> [--observe]
-#                                       격리망 생성. --observe 는 막지 않고 세기만 한다 —
-#                                       브라우저 설정 층이 혼자 얼마나 버티는지 재는 용도.
-#   nmplab.sh run  <이름> -- <명령...>   격리망 안에서 실행 (호출한 사용자 권한 유지)
-#   nmplab.sh reset <이름>              계수기 초기화
-#   nmplab.sh verdict <이름>            위반 계수 출력. 0이면 종료코드 0
-#   nmplab.sh down <이름>               정리
+#   nmplab.sh up   <name> <relay-port> [--observe]
+#                                       create the namespace. --observe counts
+#                                       without blocking, to measure how far the
+#                                       preference layer holds up on its own.
+#   nmplab.sh run  <name> -- <cmd...>    run inside, as the calling user
+#   nmplab.sh reset <name>               zero the counters
+#   nmplab.sh verdict <name>             print violations; exit 0 if there were none
+#   nmplab.sh down <name>                tear down
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +23,7 @@ STATE_DIR="${NMPLAB_STATE:-/run/nmplab}"
 
 need_root() { [[ $EUID -eq 0 ]] || exec sudo -E NMPLAB_STATE="$STATE_DIR" "$0" "$@"; }
 
-# 이름에서 결정론적으로 /30 서브넷 하나를 뽑는다. 실험대를 여러 개 동시에 띄우기 위함.
+# Derive a /30 deterministically from the name, so several labs can coexist.
 subnet_octet() { printf '%d' "$(( 0x$(printf '%s' "$1" | md5sum | cut -c1-2) % 250 + 2 ))"; }
 
 ns_name()   { echo "nmp-$1"; }
@@ -38,16 +39,16 @@ cmd_up() {
   ns=$(ns_name "$name"); hip=$(host_ip "$name"); nip=$(ns_ip "$name")
   vh=$(veth_host "$name"); vn=$(veth_ns "$name")
 
-  ip netns list | grep -qx "$ns" && { echo "이미 존재: $ns" >&2; exit 1; }
+  ip netns list | grep -qx "$ns" && { echo "already exists: $ns" >&2; exit 1; }
   mkdir -p "$STATE_DIR" "/etc/netns/$ns"
 
-  # 시스템 리졸버를 그대로 두면 netns 안 lo로 빠져 위반이 안 잡힌다.
-  # 바깥 주소를 넣어야 "DNS를 쏘려 했다"가 veth에서 계수된다.
+  # Leaving the system resolver in place sends DNS to loopback inside the
+  # namespace, where nothing counts it. Point it outward so an attempt is seen.
   if [[ "$mode" == "--observe" ]]; then
-    # 관찰 모드 — 막지 않고 세기만 한다. 브라우저 설정 층이 혼자 얼마나 버티는지
-    # 재려면 아래층을 걷어내야 한다. 실제 리졸버를 주고 밖으로도 내보낸다.
-    # 호스트의 리졸버가 127.0.0.53(systemd-resolved) 같은 루프백이면 격리망에서
-    # 도달할 수 없다. 관찰 모드에서는 실제로 나가는 리졸버를 준다.
+    # Observe mode: count, do not block. To measure the preference layer alone,
+    # the layer beneath it has to be taken away.
+    # A loopback resolver (systemd-resolved on 127.0.0.53) is unreachable from
+    # inside, so observe mode hands over one that actually leaves the machine.
     echo "nameserver ${NMPLAB_OBSERVE_DNS:-9.9.9.9}" > "/etc/netns/$ns/resolv.conf"
   else
     echo "nameserver ${NMPLAB_DNS:-9.9.9.9}" > "/etc/netns/$ns/resolv.conf"
@@ -63,8 +64,8 @@ cmd_up() {
   ip -n "$ns" link set lo up
   ip -n "$ns" route add default via "$hip"
 
-  # 호스트 방화벽(ufw 등)이 기본 DROP이면 실험대에서 오는 허용 트래픽까지 막는다.
-  # 실험대 veth에서 오는 것만 최상단에서 통과시킨다. down에서 되돌린다.
+  # A host firewall defaulting to DROP will also block the lab's permitted
+  # traffic. Accept from the lab veth at the top; `down` undoes this.
   iptables -I INPUT 1 -i "$vh" -j ACCEPT 2>/dev/null || true
 
   local verdict_action="drop"
@@ -77,8 +78,8 @@ cmd_up() {
     iptables -I FORWARD 1 -o "$vh" -j ACCEPT
   fi
 
-  # 화이트리스트. 정책은 accept가 아니라 "허용 한 줄 뒤 전부 계수 후 drop"이다.
-  # 종류별로 나눠 세는 이유: 위반이 났을 때 무엇이 샜는지 바로 알기 위함.
+  # The allow-list. Policy stays accept so the final rule can carry a counter:
+  # counting by kind is what tells you *what* leaked, not merely that something did.
   ip netns exec "$ns" nft -f - <<NFT
 table inet nmplab {
   counter dns_udp   {}
@@ -97,8 +98,8 @@ table inet nmplab {
     tcp dport 53 counter name dns_tcp log prefix "NMPLEAK dns/tcp " $verdict_action
     udp dport 443 counter name quic_udp log prefix "NMPLEAK quic " $verdict_action
     meta l4proto udp counter name other_udp log prefix "NMPLEAK udp " $verdict_action
-    # 커널이 veth를 올릴 때 내는 IPv6 이웃탐색·MLD는 브라우저가 낸 것이 아니다.
-    # 따로 세어 두되 위반으로 치지 않는다. 섞으면 진짜 누수가 잡음에 묻힌다.
+    # IPv6 neighbour discovery and MLD come from the kernel bringing the link up,
+    # not from the browser. Counted separately, or real leaks drown in noise.
     icmpv6 type { mld-listener-report, mld-listener-done, nd-router-solicit, \
                   nd-neighbor-solicit, nd-neighbor-advert } counter name v6_nd drop
     meta l4proto { icmp, icmpv6 } counter name icmp_any log prefix "NMPLEAK icmp " drop
@@ -109,7 +110,7 @@ table inet nmplab {
 NFT
 
   echo "$relay" > "$STATE_DIR/$name.relay"
-  echo "격리망 준비됨: ns=$ns  안=$nip  밖=$hip  허용=tcp://$hip:$relay  방식=${mode/--/}"
+  echo "namespace ready: ns=$ns  inside=$nip  outside=$hip  allowed=tcp://$hip:$relay  mode=${mode/--/}"
 }
 
 cmd_run() {
@@ -129,7 +130,7 @@ cmd_reset() {
   local name="$1"
   need_root reset "$name"
   ip netns exec "$(ns_name "$name")" nft reset counters table inet nmplab >/dev/null
-  echo "계수기 초기화: $(ns_name "$name")"
+  echo "counters zeroed: $(ns_name "$name")"
 }
 
 cmd_verdict() {
@@ -143,17 +144,17 @@ import json,sys
 d=json.load(sys.stdin)
 rows=[o["counter"] for o in d["nftables"] if "counter" in o]
 allowed=0; viol=0
-print("%-10s %8s %10s" % ("계수기","패킷","바이트"))
+print("%-10s %8s %10s" % ("counter","packets","bytes"))
 for c in rows:
     print("%-10s %8d %10d" % (c["name"], c["packets"], c["bytes"]))
     if c["name"]=="allowed": allowed=c["packets"]
-    elif c["name"]=="v6_nd": pass          # 커널 잡음. 위반이 아니다.
+    elif c["name"]=="v6_nd": pass          # kernel noise, not a violation
     else: viol+=c["packets"]
 print()
 nd=[c["packets"] for c in rows if c["name"]=="v6_nd"]
-print("허용 경로 패킷: %d" % allowed)
-if nd and nd[0]: print("커널 IPv6 잡음: %d (위반 아님)" % nd[0])
-print("위반 패킷:      %d" % viol)
+print("packets on the allowed route: %d" % allowed)
+if nd and nd[0]: print("kernel IPv6 noise:  %d (not a violation)" % nd[0])
+print("violating packets:  %d" % viol)
 sys.exit(1 if viol else 0)
 '
 }
@@ -171,7 +172,7 @@ cmd_down() {
   done
   ip link del "$vh" 2>/dev/null || true
   rm -rf "/etc/netns/$ns" "$STATE_DIR/$name.relay"
-  echo "정리됨: $ns"
+  echo "torn down: $ns"
 }
 
 case "${1:-}" in

@@ -1,18 +1,20 @@
 #![forbid(unsafe_code)]
-//! nmp-fake-transport — 설계 문서 §4가 말하는 `fake` 경로.
+//! fake-transport — a stand-in route, used before a real one exists.
 //!
-//! 요청을 전부 기록하는 SOCKS5 프록시다. Arti를 붙이기 전에 격리·fail-closed·
-//! 누수 시험을 먼저 끝내려고 만든다. "격리 구조를 세운다"와 "Arti를 붙인다"는
-//! 서로 다른 어려움이고, 섞으면 무엇이 잘못됐는지 판정할 수 없다.
+//! A SOCKS5 proxy that logs every request. It exists so that isolation,
+//! fail-closed behaviour and leak testing can be finished before a real
+//! transport is wired in. "Build the isolation" and "integrate a transport"
+//! are different problems; combined, neither failure can be diagnosed.
 //!
-//! 부수적으로 이 기록이 §9의 "이 요청이 어느 경로로 나갔는가" 화면의 자료원이다.
+//! Its log is also the data source for showing which route a request took.
 //!
-//! 모드:
-//!   --mode connect  실제로 연결한다 (평범한 프록시)
-//!   --mode sink     받아만 두고 버린다 (연결은 성공, 자료는 안 나감)
-//!   --mode deny     전부 거절한다 (fail-closed 시험)
+//! Modes:
+//!   --mode connect  actually connect (an ordinary proxy)
+//!   --mode sink     accept and discard (connection succeeds, nothing leaves)
+//!   --mode deny     refuse everything (fail-closed testing)
 //!
-//! 표준 라이브러리만 쓴다. 의존성이 없어야 실험대가 흔들리지 않는다.
+//! Standard library only. A test rig with no dependencies has nothing that can
+//! shift underneath it.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -84,17 +86,18 @@ impl Journal {
     }
 }
 
-/// SOCKS5 주소부를 읽어 (표시용 문자열, 해석 대상) 으로 돌려준다.
-/// 도메인은 여기서 해석하지 않는다 — 해석 자체가 어디서 일어나는지가 시험 대상이다.
+/// Read the SOCKS5 address field, returning (display string, target).
+/// Domains are deliberately not resolved here: *where* resolution happens is
+/// precisely what is under test.
 fn read_target(s: &mut TcpStream) -> std::io::Result<(String, String, u16, &'static str)> {
     let mut head = [0u8; 4];
     s.read_exact(&mut head)?;
     if head[0] != 5 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "socks 버전"));
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "socks version"));
     }
     let cmd = head[1];
     if cmd != 1 {
-        return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "CONNECT 외 미지원"));
+        return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "only CONNECT is supported"));
     }
     let (host, kind) = match head[3] {
         1 => {
@@ -118,7 +121,7 @@ fn read_target(s: &mut TcpStream) -> std::io::Result<(String, String, u16, &'sta
         other => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("주소형식 {}", other),
+                format!("address type {}", other),
             ))
         }
     };
@@ -147,8 +150,8 @@ fn pump(mut a: TcpStream, mut b: TcpStream) {
 fn handle(mut c: TcpStream, cfg: Arc<Cfg>, j: Arc<Journal>) -> std::io::Result<()> {
     let peer = c.peer_addr().map(|a| a.to_string()).unwrap_or_default();
 
-    // 인사. 아이디/비번 인증도 받아준다 — Arti의 스트림 격리가 이 자리를 쓰므로,
-    // 나중에 무엇이 어떤 격리 딱지를 달고 오는지 여기서 그대로 보인다.
+    // Greeting. Username/password auth is accepted because stream isolation
+    // rides in those fields, so whatever label a client attaches shows up here.
     let mut hello = [0u8; 2];
     c.read_exact(&mut hello)?;
     let nmethods = hello[1] as usize;
@@ -197,7 +200,7 @@ fn handle(mut c: TcpStream, cfg: Arc<Cfg>, j: Arc<Journal>) -> std::io::Result<(
         let mut f = vec![("ev", "deny".to_string())];
         f.extend(base.clone());
         j.write(&f);
-        c.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0])?; // 연결 거절
+        c.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0])?; // refused
         return Ok(());
     }
 
@@ -222,15 +225,15 @@ fn handle(mut c: TcpStream, cfg: Arc<Cfg>, j: Arc<Journal>) -> std::io::Result<(
         return Ok(());
     }
 
-    // Mode::Connect — 도메인 해석이 여기서 일어난다. 즉 클라이언트는 이름을
-    // 넘겼을 뿐이고, 이 프로세스가 대신 푼다. socks_remote_dns가 참일 때
-    // 브라우저가 이름을 넘기는지 주소를 넘기는지가 addrtype에 그대로 남는다.
+    // Mode::Connect — resolution happens here, which means the client handed
+    // over a name and this process resolved it on its behalf. Whether the
+    // browser passes a name or an address is recorded verbatim in addrtype.
     let t0 = now_ms();
     let resolved = (host.as_str(), port).to_socket_addrs();
     let up = match resolved {
         Ok(mut it) => match it.next() {
             Some(a) => TcpStream::connect(a).map(|s| (s, a.to_string())),
-            None => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "해석 결과 없음")),
+            None => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "resolved to nothing")),
         },
         Err(e) => Err(e),
     };
@@ -287,7 +290,7 @@ fn main() {
     let l = match TcpListener::bind(&cfg.listen) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("듣기 실패 {}: {}", cfg.listen, e);
+            eprintln!("could not listen on {}: {}", cfg.listen, e);
             std::process::exit(1);
         }
     };
@@ -301,7 +304,7 @@ fn main() {
         }),
         ("transport", cfg.label.clone()),
     ]);
-    eprintln!("nmp-fake-transport 듣는 중: {}", cfg.listen);
+    eprintln!("fake-transport listening on {}", cfg.listen);
 
     for s in l.incoming() {
         match s {
@@ -311,7 +314,7 @@ fn main() {
                     let _ = handle(s, c, j);
                 });
             }
-            Err(e) => eprintln!("수락 실패: {}", e),
+            Err(e) => eprintln!("accept failed: {}", e),
         }
     }
 }
