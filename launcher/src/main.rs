@@ -30,6 +30,7 @@
 
 mod exec;
 mod nft;
+mod out;
 mod preflight;
 mod profile;
 
@@ -68,8 +69,13 @@ fn main() -> ExitCode {
             None => Err("__inner needs a profile name".into()),
         },
         "-h" | "--help" | "help" | "" => {
-            print!("{USAGE}");
-            return ExitCode::SUCCESS;
+            return match out::text(USAGE) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            };
         }
         other => Err(format!("unknown command: {other}\n\n{USAGE}")),
     };

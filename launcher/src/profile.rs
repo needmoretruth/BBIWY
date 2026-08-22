@@ -4,6 +4,8 @@
 //! implementation, or adding Session Router, should mean editing this table and
 //! nothing else; the rest of the code only ever sees a `Transport`.
 
+use crate::out;
+
 /// How a profile reaches the outside.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Transport {
@@ -138,27 +140,26 @@ fn char_width(c: char) -> usize {
 }
 
 pub fn list() -> Result<(), String> {
-    println!(
+    out::line(&format!(
         "  {} {} {} {}  {}",
         pad("PROFILE", 12),
         pad("ROUTE", 17),
         pad("SUFFIX", 9),
         pad("STATE", 14),
         "MARK"
-    );
-    println!("  ────────────────────────────────────────────────────────────");
+    ))?;
+    out::line("  ────────────────────────────────────────────────────────────")?;
     for p in PROFILES {
-        println!(
+        out::line(&format!(
             "  {} {} {} {}  {}",
             pad(p.name, 12),
             pad(&p.route(), 17),
             pad(p.suffix.unwrap_or("—"), 9),
             pad(if p.ready { "ready" } else { "not built yet" }, 14),
             p.glyph
-        );
+        ))?;
     }
-    println!();
-    println!("All five profiles share one fingerprint. The difference is strictness,");
-    println!("not identity.");
-    Ok(())
+    out::line("")?;
+    out::line("All five profiles share one fingerprint. The difference is strictness,")?;
+    out::line("not identity.")
 }

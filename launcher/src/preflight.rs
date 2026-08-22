@@ -4,6 +4,7 @@
 //! browser that starts normally on a machine where isolation silently does not
 //! work, leaving someone believing they are protected when they are not.
 
+use crate::out;
 use crate::profile::pad;
 use std::path::Path;
 use std::process::Command;
@@ -129,7 +130,8 @@ fn display_grade() -> (Grade, String) {
 }
 
 pub fn doctor() -> Result<(), String> {
-    println!("BBIWY preflight\n");
+    out::line("BBIWY preflight")?;
+    out::line("")?;
     let cs = checks();
     let mut fatal_failed = false;
     for c in &cs {
@@ -140,31 +142,30 @@ pub fn doctor() -> Result<(), String> {
         } else {
             "WARN"
         };
-        println!("  {mark}  {} {}", pad(c.name, 20), c.detail);
+        out::line(&format!("  {mark}  {} {}", pad(c.name, 20), c.detail))?;
         if !c.ok && c.fatal {
             fatal_failed = true;
         }
     }
-    println!();
+    out::line("")?;
     if fatal_failed {
-        println!("Isolation cannot be established. Fix the FAIL lines above first.");
+        out::line("Isolation cannot be established. Fix the FAIL lines above first.")?;
         return Err("preflight failed".into());
     }
-    println!("Network isolation holds.");
+    out::line("Network isolation holds.")?;
 
     // Having the binaries is not the same as being able to use them.
     match Command::new("pasta")
         .args(["--config-net", "--tcp-ports", "none", "--udp-ports", "none", "--", "/bin/true"])
         .output()
     {
-        Ok(o) if o.status.success() => println!("Built a namespace for real, and it worked."),
+        Ok(o) if o.status.success() => out::line("Built a namespace for real, and it worked."),
         Ok(o) => {
             let err = String::from_utf8_lossy(&o.stderr);
             let line = err.lines().find(|l| !l.contains("IPv6")).unwrap_or("").trim();
-            println!("WARN  could not actually create a namespace: {line}");
-            return Err("namespace creation failed".into());
+            out::line(&format!("WARN  could not actually create a namespace: {line}"))?;
+            Err("namespace creation failed".into())
         }
-        Err(e) => return Err(format!("could not run pasta: {e}")),
+        Err(e) => Err(format!("could not run pasta: {e}")),
     }
-    Ok(())
 }
