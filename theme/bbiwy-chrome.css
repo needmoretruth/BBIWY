@@ -1,0 +1,78 @@
+/* BBIWY browser chrome -- the ink ramp applied to the toolbar, tabs and urlbar.
+ *
+ * The design system tokens (bbiwy-tokens.css) cover panels, dialogs and
+ * notification bars. They do not reach the toolbar: the toolbar, the tab strip
+ * and the address bar read a separate set of variables that the theme layer
+ * declares directly. Those are what this file sets.
+ *
+ * Values come from docs/DESIGN-LANGUAGE.ko.md section 1 and are not chosen
+ * again here. Unlayered on purpose, so it outranks the theme's own layers.
+ */
+
+:root {
+  /* Firefox picks its native widget rendering from this. Without it the
+   * scrollbars and form controls stay light against an ink background. */
+  color-scheme: dark;
+
+  --bbiwy-ink-000: #08090A;  /* window */
+  --bbiwy-ink-050: #101214;  /* toolbars, panels */
+  --bbiwy-ink-100: #191C1F;  /* cards, input fields */
+  --bbiwy-ink-200: #24282C;  /* borders */
+  --bbiwy-ink-300: #3A3F45;  /* emphasised borders, separators */
+  --bbiwy-ink-500: #6E757D;  /* disabled text */
+  --bbiwy-ink-700: #A8AFB6;  /* secondary text, icons */
+  --bbiwy-ink-900: #E4E7EA;  /* body text */
+  --bbiwy-ink-max: #F7F9FA;  /* headings, the current item */
+
+  /* Sharp corners. The design language caps every radius at 2px. */
+  --toolbarbutton-border-radius: 2px;
+  --urlbar-icon-border-radius: 2px;
+
+  --toolbar-bgcolor: var(--bbiwy-ink-050);
+  --toolbar-color: var(--bbiwy-ink-900);
+  --toolbarbutton-icon-fill: var(--bbiwy-ink-700);
+
+  --tab-selected-bgcolor: var(--bbiwy-ink-100);
+  --tab-selected-textcolor: var(--bbiwy-ink-max);
+  --tabs-navbar-separator-color: var(--bbiwy-ink-200);
+
+  --toolbar-field-background-color: var(--bbiwy-ink-100);
+  --toolbar-field-color: var(--bbiwy-ink-900);
+  --toolbar-field-border-color: var(--bbiwy-ink-200);
+  --toolbar-field-focus-background-color: var(--bbiwy-ink-100);
+  --toolbar-field-focus-color: var(--bbiwy-ink-max);
+
+  --urlbar-box-bgcolor: var(--bbiwy-ink-100);
+  --urlbar-box-text-color: var(--bbiwy-ink-900);
+  --urlbar-box-hover-bgcolor: var(--bbiwy-ink-200);
+  --urlbar-box-hover-text-color: var(--bbiwy-ink-max);
+  --urlbar-box-focus-bgcolor: var(--bbiwy-ink-200);
+
+  --arrowpanel-background: var(--bbiwy-ink-050);
+  --arrowpanel-color: var(--bbiwy-ink-900);
+  --arrowpanel-border-color: var(--bbiwy-ink-200);
+  --arrowpanel-dimmed: var(--bbiwy-ink-100);
+  --arrowpanel-dimmed-further: var(--bbiwy-ink-200);
+
+  --button-background-color: var(--bbiwy-ink-100);
+  --button-background-color-hover: var(--bbiwy-ink-200);
+  --button-background-color-active: var(--bbiwy-ink-300);
+  --button-text-color: var(--bbiwy-ink-900);
+
+  /* The window itself, behind and around the toolbox. */
+  --lwt-accent-color: var(--bbiwy-ink-000);
+  --lwt-text-color: var(--bbiwy-ink-900);
+}
+
+/* The toolbox draws the strip the tabs sit on. It reads the theme's accent
+ * colour rather than any of the variables above. */
+#navigator-toolbox {
+  background-color: var(--bbiwy-ink-000);
+}
+
+/* The focus ring is the loudest thing on an otherwise grey screen. Keeping it
+ * grey means colour stays available for the three status signals. */
+#urlbar[focused="true"] > #urlbar-background {
+  border-color: var(--bbiwy-ink-300) !important;
+  outline-color: var(--bbiwy-ink-300) !important;
+}
