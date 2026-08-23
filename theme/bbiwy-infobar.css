@@ -1,0 +1,47 @@
+/* BBIWY notification bars.
+ *
+ * A third route colour takes to the screen, and neither of the other two
+ * stylesheets can reach it. The notification bar is a custom element with a
+ * shadow root, and a shadow root does not see the document's rules. Only
+ * custom properties cross the boundary, and this component shadows the ones
+ * that would have carried the ink ramp in. So it is overridden where it is
+ * declared.
+ *
+ * The stripe down the left edge is the reason this file exists. Upstream
+ * paints it with one fixed gradient -- purple to pink to amber -- on every bar
+ * regardless of what the bar says. Three colours that are the same whether the
+ * message is a hint or a failure carry no information at all; they are brand
+ * decoration, and docs/DESIGN-LANGUAGE.ko.md leaves no room for that.
+ *
+ * It is not deleted, though. It is wired to the severity icon's colour, which
+ * the design system already drives: information is grey, a warning is
+ * sig-warn, a failure is sig-fail. The stripe stops being decoration and
+ * starts being the state read from across the room -- which is what a
+ * full-width bar at the top of the window is good for.
+ */
+
+:host(.infobar) {
+  --info-bar-background-color: var(--bbiwy-ink-100, #191C1F);
+  --info-bar-text-color: var(--bbiwy-ink-900, #E4E7EA);
+  --message-bar-border-color: var(--bbiwy-ink-200, #24282C);
+}
+
+@media not (prefers-contrast) {
+  :host(.infobar) {
+    /* Upstream lifts the bar off the page with a shadow. On an ink background
+     * a shadow reads as smudge, so the bar is separated by its border. */
+    box-shadow: none;
+    background-color: var(--info-bar-background-color);
+    color: var(--info-bar-text-color);
+    border-block-end: 1px solid var(--bbiwy-ink-200, #24282C);
+
+    &::before {
+      background-image: none;
+      background-color: var(--message-bar-icon-color, var(--bbiwy-ink-300, #3A3F45));
+      /* The design language caps every radius at 2px. */
+      border-start-start-radius: 0;
+      border-end-start-radius: 0;
+      width: 3px;
+    }
+  }
+}

@@ -5,6 +5,7 @@
 //! nothing else; the rest of the code only ever sees a `Transport`.
 
 use crate::out;
+use std::path::Path;
 
 /// How a profile reaches the outside.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -103,6 +104,56 @@ impl Profile {
             Transport::Direct => None,
             Transport::Socks5(p) | Transport::Http(p) => Some(p),
         }
+    }
+
+    /// Turn on the route marking the browser chrome reads.
+    ///
+    /// The window says which route it is on three ways at once -- a glyph, the
+    /// name in letters, and the treatment of its edge -- and all three are
+    /// driven from CSS by these preferences. See `theme/bbiwy-path.css`.
+    ///
+    /// **All five are written, four of them false.** Writing only the true one
+    /// would be enough on a fresh profile and wrong on a used one: `prefs.js`
+    /// keeps whatever was set before, and a leftover would leave a window
+    /// claiming two routes at once. The one accident this browser must never
+    /// have is a window that names the wrong route, so the state is stated in
+    /// full rather than assumed.
+    ///
+    /// The block is fenced. Anything else in `user.js` -- the proxy settings,
+    /// whatever a lab harness put there -- survives being rewritten.
+    pub fn write_route_marking(&self, dir: &Path) -> Result<(), String> {
+        const BEGIN: &str = "// >>> bbiwy route -- written at every start";
+        const END: &str = "// <<< bbiwy route";
+
+        let path = dir.join("user.js");
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+
+        let mut kept = String::new();
+        let mut inside = false;
+        for line in existing.lines() {
+            if line == BEGIN {
+                inside = true;
+            } else if line == END {
+                inside = false;
+            } else if !inside {
+                kept.push_str(line);
+                kept.push('\n');
+            }
+        }
+
+        kept.push_str(BEGIN);
+        kept.push('\n');
+        for other in PROFILES {
+            kept.push_str(&format!(
+                "user_pref(\"bbiwy.path.{}\", {});\n",
+                other.name,
+                other.name == self.name
+            ));
+        }
+        kept.push_str(END);
+        kept.push('\n');
+
+        std::fs::write(&path, kept).map_err(|e| format!("could not write {}: {e}", path.display()))
     }
 
     pub fn route(&self) -> String {

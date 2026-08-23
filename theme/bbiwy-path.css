@@ -1,0 +1,135 @@
+/* BBIWY path identity -- what tells you which route this window is on.
+ *
+ * The worst accident this browser can have is a user believing a window is on
+ * Tor when it is not. So the route is stated three ways at once, as
+ * docs/DESIGN-LANGUAGE.ko.md section 2 requires: a glyph, the name spelled out
+ * in letters, and a treatment of the window edge. Three, because a glyph alone
+ * is guessed at, a name alone is not read, and an edge alone is not recognised.
+ *
+ * None of it is colour. Colour in this browser reports a state, never a route.
+ *
+ * The switch is a preference read straight from CSS, so the whole mechanism is
+ * one stylesheet and no script:
+ *
+ *   bbiwy.path.daily · bbiwy.path.hardened · bbiwy.path.tor
+ *   bbiwy.path.i2p   · bbiwy.path.session
+ *
+ * With none of them set nothing is drawn, which is correct: a browser started
+ * outside the launcher is on no BBIWY route and must not claim one.
+ *
+ * The edge is ink-500, where docs/DESIGN-LANGUAGE.ko.md section 2 says ink-300.
+ * On screen ink-300 against the window background is 1.88:1, which at one pixel
+ * is not there at all -- and an edge that cannot be seen is worse than no edge,
+ * because its absence reads as the daily profile. ink-500 measures 4.27:1,
+ * clearing the 3:1 that non-text interface parts are held to, and it is still
+ * quiet enough not to read as a focus ring. Raised as a deviation rather than
+ * taken silently.
+ *
+ * The media query is `-moz-pref("name")`, not the older `-moz-bool-pref: name`.
+ * Gecko replaced one with the other and dropped the old spelling, and a media
+ * feature it no longer knows is not an error -- the block is simply skipped,
+ * silently, leaving a window with no route marking at all. Measured on a real
+ * build before this was written down.
+ */
+
+/* ---------------------------------------------------------------- the label */
+
+/* First child of the address bar's content box, ahead of the identity box.
+ * Always there: it does not collapse at narrow widths, it is not behind a
+ * hover, and there is no state in which it is hidden. A route indicator that
+ * can be absent is worse than none, because its absence looks like the daily
+ * profile.
+ *
+ * `urlbar-input-container` is a class, not an id. The id form silently matches
+ * nothing. */
+.urlbar-input-container::before {
+  content: var(--bbiwy-path-label, none);
+
+  /* The one place a fixed-width font is mandatory: 0/O and 1/l have to stay
+   * apart here for the same reason they do in an onion address. */
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.8em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+
+  color: var(--bbiwy-ink-700, #A8AFB6);
+  padding-inline: 10px;
+  margin-inline-end: 8px;
+  border-inline-end: 1px solid var(--bbiwy-ink-500, #6E757D);
+
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  white-space: pre;
+
+  /* The address is user data; the route is not. Nothing here is selectable, so
+   * a route can never be copied out of one window into a screenshot of
+   * another. */
+  user-select: none;
+}
+
+/* --------------------------------------------------------- the window edge */
+
+/* A border on the window element, and it has to be a border. An outline would
+ * have been the tidier choice -- drawn inside, costing no layout -- but on the
+ * window element Gecko does not paint one: measured, a 1px outline at any
+ * offset never reaches a pixel, while the same rule on `#navigator-toolbox`
+ * draws fine. A border draws.
+ *
+ * The two pixels a border costs on each axis do not become a fingerprint.
+ * Every profile that has an edge also letterboxes, so the viewport the page
+ * sees is a rounded step and absorbs the difference; and the one profile whose
+ * letterboxing can be switched off -- daily -- is the one with no edge at all.
+ *
+ * `!important` because the chrome sheet sets the window's border itself. */
+:root {
+  border: var(--bbiwy-path-edge, none) !important;
+}
+
+/* ------------------------------------------------------------- the five */
+
+/* daily -- the only ordinary profile. Filled circle, and no edge at all: the
+ * absence is itself the signal, and daily is the one route where a plain
+ * window is the honest picture. */
+@media (-moz-pref("bbiwy.path.daily")) {
+  :root {
+    --bbiwy-path-label: "\25CF  DAILY";
+  }
+}
+
+/* hardened -- direct as well, but nothing survives the session. A hollow
+ * circle against daily's filled one, and a solid edge. */
+@media (-moz-pref("bbiwy.path.hardened")) {
+  :root {
+    --bbiwy-path-label: "\25CB  HARDENED";
+    --bbiwy-path-edge: 1px solid var(--bbiwy-ink-500, #6E757D);
+  }
+}
+
+/* tor -- three rings for three hops, and a broken edge, because the route is
+ * relayed rather than direct. */
+@media (-moz-pref("bbiwy.path.tor")) {
+  :root {
+    --bbiwy-path-label: "\25CE  TOR";
+    --bbiwy-path-edge: 1px dashed var(--bbiwy-ink-500, #6E757D);
+  }
+}
+
+/* i2p -- garlic routing. A finer break than Tor's, so the two are still told
+ * apart from one pixel of edge. */
+@media (-moz-pref("bbiwy.path.i2p")) {
+  :root {
+    --bbiwy-path-label: "\25C6  I2P";
+    --bbiwy-path-edge: 1px dotted var(--bbiwy-ink-500, #6E757D);
+  }
+}
+
+/* session -- internal services only, the narrowest route of the five, so it
+ * gets the heaviest edge. Doubled lines need three pixels to render as two. */
+@media (-moz-pref("bbiwy.path.session")) {
+  :root {
+    --bbiwy-path-label: "\2B21  SESSION";
+    --bbiwy-path-edge: 3px double var(--bbiwy-ink-500, #6E757D);
+  }
+}

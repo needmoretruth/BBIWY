@@ -93,6 +93,11 @@ pub fn inner(name: &str) -> Result<(), String> {
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("could not create profile directory {}: {e}", dir.display()))?;
 
+    // Before the browser starts, not after: the chrome reads these while it is
+    // building the window, and a route marking that arrives late is a window
+    // that was briefly unmarked.
+    p.write_route_marking(&dir)?;
+
     let browser = browser()?;
 
     // Drop exactly the two capabilities that could undo the allow-list, and no
