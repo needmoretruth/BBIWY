@@ -73,6 +73,12 @@ and a leftover would leave a window claiming two routes at once.
 A browser started outside the launcher has none of them set and is marked with
 nothing, which is correct: it is on no BBIWY route and must not claim one.
 
+The marks are the large variants of the shapes the design language names —
+U+2B24 and U+25EF, not U+25CF and U+25CB. Side by side in a real window the
+small pair draws at about half the height of the ring, the diamond and the
+hexagon, and five marks that do not share a size read as five different kinds
+of thing rather than five values of one.
+
 ## Applying it
 
 ```sh
