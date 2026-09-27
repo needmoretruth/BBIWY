@@ -63,6 +63,10 @@ Needs `pasta` (package `passt`), `nftables`, `util-linux`, and for installing
 `curl gpg tar xz zip unzip`. On Debian/Ubuntu:
 `sudo apt install passt nftables curl gpg xz-utils zip unzip`.
 
+A static binary for Linux x86_64 is attached to each
+[release](https://github.com/needmoretruth/BBIWY/releases), built from its tag
+by `.github/workflows/release.yml`. Or build it:
+
 ```sh
 cd launcher && cargo build --release
 ./target/release/bbiwy install      # latest Mullvad Browser, signature checked, locked down

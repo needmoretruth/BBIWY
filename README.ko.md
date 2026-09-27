@@ -57,6 +57,9 @@ root는 **설치할 때 딱 한 번** 필요합니다 — AppArmor 프로필을 
 `curl gpg tar xz zip unzip` 이 필요합니다. 데비안/우분투:
 `sudo apt install passt nftables curl gpg xz-utils zip unzip`.
 
+리눅스 x86_64 용 정적 바이너리가 [릴리스](https://github.com/needmoretruth/BBIWY/releases)마다
+붙어 있습니다 — 그 태그에서 `.github/workflows/release.yml` 이 지은 것입니다. 직접 지어도 됩니다:
+
 ```sh
 cd launcher && cargo build --release
 ./target/release/bbiwy install      # 최신 Mullvad Browser, 서명 확인, 잠금
