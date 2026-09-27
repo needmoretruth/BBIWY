@@ -3,7 +3,7 @@
 **Big Brother Is Watching You** — a privacy browser where every network path
 lives in its own sealed profile.
 
-> **Status: alpha (0.1.0).** `daily`, `hardened`, `tor` and `i2p` install and
+> **Status: alpha (0.1.0-alpha.1).** `daily`, `hardened`, `tor` and `i2p` install and
 > run. `session` waits for an upstream SOCKS listener. Linux x86_64 only.
 > See [Measurements](docs/MEASUREMENTS.md) for what has been verified, and on what.
 

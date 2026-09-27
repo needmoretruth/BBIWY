@@ -2,7 +2,7 @@
 
 **Big Brother Is Watching You** — 네트워크 경로마다 프로필을 따로 두는 프라이버시 브라우저.
 
-> **상태: 알파 (0.1.0).** `daily`·`hardened`·`tor`·`i2p` 는 설치하고 쓸 수 있습니다.
+> **상태: 알파 (0.1.0-alpha.1).** `daily`·`hardened`·`tor`·`i2p` 는 설치하고 쓸 수 있습니다.
 > `session` 은 위쪽에 SOCKS 리스너가 생기기를 기다립니다. 리눅스 x86_64 전용.
 > 무엇을 어디서 확인했는지는 [측정 결과](docs/MEASUREMENTS.md)를 보십시오.
 
