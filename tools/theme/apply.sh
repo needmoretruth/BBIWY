@@ -3,18 +3,23 @@
 #
 #   tools/theme/apply.sh <install-dir>
 #
-# <install-dir> is the directory holding `Browser/`. Nothing is compiled: the
-# three stylesheets are appended to the two they override, inside `omni.ja`,
-# which is an ordinary zip. Replacing one entry takes about fifty milliseconds
-# and leaves the other eight thousand alone. The upstream build injects its
-# preferences the same way, so this is the archive's supported shape rather
-# than a trick played on it.
+# <install-dir> is the directory holding `Browser/`. Nothing is compiled: four
+# stylesheets are appended to the three entries they override, in the two
+# `omni.ja` files (`Browser/omni.ja` and `Browser/browser/omni.ja`), each an
+# ordinary zip. Replacing one entry takes about fifty milliseconds and leaves
+# the other eight thousand alone. The upstream build injects its preferences
+# the same way, so this is the archive's supported shape rather than a trick
+# played on it.
 #
 # Running it twice is the same as running it once: the previous block is cut
 # before the new one goes on.
 #
-# This is the design loop. A release applies the same files to the source tree,
-# so that what ships is what a reproducible build reproduces.
+# `bbiwy install` embeds the same four files and appends them under the same
+# marker, so the two are interchangeable: either one, run over the other's
+# result, replaces the block rather than adding a second. This script stays the
+# design loop — it reads the stylesheets from the tree, so a change shows up
+# without rebuilding the launcher. A release applies the same files to the
+# source tree, so that what ships is what a reproducible build reproduces.
 set -eu
 
 MARK='/* ==== BBIWY ==== */'

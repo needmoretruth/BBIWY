@@ -14,7 +14,7 @@ It measures two things:
 Branching is on the *running profile's actual path*, not on an environment
 variable: a user can set a variable, and a lock a user can lift is not a lock.
 """
-import argparse, importlib.util, json, os, shutil, subprocess, sys, tempfile, time
+import argparse, importlib.util, json, os, shutil, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location(
@@ -40,7 +40,9 @@ try {
     lockPref("nmp.profile.path", String(d.path));
   } catch (e) {
     // If the path cannot be read, fall to the safe side and lock as privacy.
-    lockPref("bbiwy.profile.path", "<failed>");
+    // The marker goes in the pref WATCH reads, so the fallback shows up in
+    // the results instead of passing for a path that was read.
+    lockPref("nmp.profile.path", "<failed>");
   }
   lockPref("nmp.profile.class", klass);
 
@@ -77,12 +79,12 @@ def install_autoconfig(browser_dir):
 
 
 def measure(binary, gecko, port, profdir):
-    gd = subprocess.Popen([gecko, "--port", str(port), "--log", "error"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Through drive, so that chrome scope — where the locks are read — is asked
+    # for the way this geckodriver wants.
+    gd, wd = drive.start_geckodriver(gecko, port)
     try:
         if not drive.wait_port(port, 30):
             return {"<error>": "geckodriver did not start"}
-        wd = drive.WD(port)
         wd.start(binary, profdir)
         try:
             wd.ctx("chrome")

@@ -17,9 +17,15 @@ Standard library only. Adding selenium would make its version one more variable.
 import argparse, json, os, socket, subprocess, sys, time, urllib.request
 
 class WD:
-    def __init__(self, port):
+    def __init__(self, port, driver_grants=False):
         self.base = "http://127.0.0.1:%d" % port
         self.sid = None
+        # Chrome scope — where lock state is read — has to be granted. geckodriver
+        # 0.36 and later grant it themselves when started with
+        # --allow-system-access, and 0.37 refuses the browser argument that did
+        # it before; older ones know only that argument. start_geckodriver()
+        # works out which, and sets this.
+        self.driver_grants = driver_grants
 
     def _req(self, method, path, body=None):
         url = self.base + path
@@ -34,19 +40,31 @@ class WD:
             raise RuntimeError("%s %s -> %d\n%s" % (method, path, e.code, body)) from None
 
     def start(self, binary, profile, extra_args=None):
+        args = ["--profile", profile, "--no-remote"]
+        if not self.driver_grants:
+            args.append("-remote-allow-system-access")
         caps = {
             "capabilities": {
                 "alwaysMatch": {
                     "moz:firefoxOptions": {
                         "binary": binary,
-                        "args": ["--profile", profile, "--no-remote", "-remote-allow-system-access"] + (extra_args or []),
+                        "args": args + (extra_args or []),
                         "prefs": {"marionette.enabled": True},
                     },
                     "acceptInsecureCerts": True,
                 }
             }
         }
-        self.sid = self._req("POST", "/session", caps)["value"]["sessionId"]
+        try:
+            self.sid = self._req("POST", "/session", caps)["value"]["sessionId"]
+        except RuntimeError as e:
+            if self.driver_grants or "can't be set via capabilities" not in str(e):
+                raise
+            # Said plainly, rather than as the driver's HTTP 400.
+            raise RuntimeError(
+                "this geckodriver refuses -remote-allow-system-access: it is 0.36 or "
+                "later, and grants chrome scope only when started with "
+                "--allow-system-access. Start it with drive.start_geckodriver().") from None
         return self.sid
 
     def ctx(self, which):
@@ -193,12 +211,25 @@ setTimeout(() => { out.state = "timed out"; done(out); }, 12000);
 
 WATCHED = [
     "network.proxy.type", "network.proxy.socks", "network.proxy.socks_port",
-    "network.proxy.socks_remote_dns", "network.proxy.allow_hijacking_localhost",
-    "network.proxy.failover_direct", "media.peerconnection.enabled",
+    "network.proxy.socks_version",
+    # Both: Firefox 128 split them, and either one off lets names out.
+    "network.proxy.socks_remote_dns", "network.proxy.socks5_remote_dns",
+    # The HTTP proxy the I2P route uses, and which a SOCKS route must leave empty.
+    "network.proxy.http", "network.proxy.http_port",
+    "network.proxy.ssl", "network.proxy.ssl_port",
+    "network.proxy.allow_hijacking_localhost", "network.proxy.no_proxies_on",
+    "network.proxy.failover_direct", "network.proxy.allow_bypass",
+    "network.http.http3.enable", "media.peerconnection.enabled",
     "network.trr.mode", "network.trr.uri", "network.dns.disabled",
     "privacy.resistFingerprinting", "app.update.auto", "extensions.update.enabled",
     "browser.safebrowsing.malware.enabled", "security.OCSP.enabled",
     "network.captive-portal-service.enabled", "network.connectivity-service.enabled",
+    # What the launcher's lock file says about itself: that it ran to the end,
+    # which profile it decided it was in, and the route the window is marked
+    # with. Absent on a browser without it.
+    "bbiwy.lock.complete", "bbiwy.lock.profile",
+    "bbiwy.path.daily", "bbiwy.path.hardened", "bbiwy.path.tor",
+    "bbiwy.path.i2p", "bbiwy.path.session",
 ]
 
 def wait_port(port, timeout=30):
@@ -210,6 +241,32 @@ def wait_port(port, timeout=30):
         except OSError:
             time.sleep(0.2)
     return False
+
+_grants = {}
+
+def driver_grants_system_access(geckodriver):
+    """Whether this geckodriver has --allow-system-access (0.36 and later).
+
+    Asked of the binary itself rather than read off its version number: the
+    flag is what matters, and --help lists it.
+    """
+    if geckodriver not in _grants:
+        try:
+            r = subprocess.run([geckodriver, "--help"], capture_output=True, text=True, timeout=30)
+            _grants[geckodriver] = "--allow-system-access" in (r.stdout + r.stderr)
+        except (OSError, subprocess.SubprocessError):
+            _grants[geckodriver] = False
+    return _grants[geckodriver]
+
+def start_geckodriver(geckodriver, port, env=None):
+    """Starts geckodriver on `port`. Returns the process, and a WD for it that
+    asks for chrome scope the way this geckodriver wants to be asked."""
+    grants = driver_grants_system_access(geckodriver)
+    cmd = [geckodriver, "--port", str(port), "--log", "error"]
+    if grants:
+        cmd.append("--allow-system-access")
+    gd = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    return gd, WD(port, driver_grants=grants)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -225,16 +282,16 @@ def main():
                     help="gather WebRTC candidates, to test whether ICE holds the proxy")
     ap.add_argument("--dns-probe", action="store_true",
                     help="call nsIDNSService directly from chrome scope to provoke a leak")
+    ap.add_argument("--headless", action="store_true",
+                    help="run the browser without a window, so no display is needed")
     a = ap.parse_args()
 
-    gd = subprocess.Popen([a.geckodriver, "--port", str(a.port), "--log", "error"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    gd, wd = start_geckodriver(a.geckodriver, a.port)
     out = {"prefs": None, "fingerprint": None, "addon": None, "errors": []}
-    wd = WD(a.port)
     try:
         if not wait_port(a.port):
             sys.exit("geckodriver did not start")
-        wd.start(a.binary, a.profile)
+        wd.start(a.binary, a.profile, ["--headless"] if a.headless else None)
 
         wd.ctx("chrome")
         out["prefs"] = wd.script(PREF_DUMP, [WATCHED])
