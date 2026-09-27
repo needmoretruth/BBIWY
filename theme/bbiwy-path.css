@@ -141,3 +141,28 @@
     --bbiwy-path-edge: 3px double var(--bbiwy-ink-500, #6E757D);
   }
 }
+
+/* ------------------------------------------------------- the unlocked state */
+
+/* The lock file the launcher installs (bbiwy.cfg) sets bbiwy.lock.complete as
+ * its very last step, in every profile. A window of this browser without it is
+ * one whose locks did not all go in: the file is missing, or it stopped part-
+ * way. That is a failure, and the one state in this sheet that earns colour.
+ *
+ * It replaces the route label rather than sitting next to it. A route claim on
+ * top of locks that may not hold is exactly the claim this sheet exists to keep
+ * true, so while the locks are in doubt no route is claimed at all. It is not a
+ * route either, so it does not borrow a route's glyph or edge style.
+ *
+ * Last in the file, so that it wins over the five above. */
+@media not (-moz-pref("bbiwy.lock.complete")) {
+  :root {
+    --bbiwy-path-label: "\26A0  UNLOCKED";
+    --bbiwy-path-edge: 2px solid var(--bbiwy-sig-fail, #FF5C5C);
+  }
+
+  .urlbar-input-container::before {
+    color: var(--bbiwy-sig-fail, #FF5C5C);
+    border-inline-end-color: var(--bbiwy-sig-fail, #FF5C5C);
+  }
+}

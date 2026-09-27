@@ -2,12 +2,13 @@
 //!
 //! **This is the only place transport knowledge lives.** Swapping the Tor
 //! implementation, or adding Session Router, should mean editing this table and
-//! nothing else; the rest of the code only ever sees a `Transport`.
+//! nothing else; the rest of the code only ever sees a `Transport`, or the
+//! `Relay` it resolves to once the installed ports are known.
 
-use crate::out;
-use std::path::Path;
+use crate::out::{self, pad};
+use std::fmt;
 
-/// How a profile reaches the outside.
+/// How a profile reaches the outside, with the port the table assumes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Transport {
     /// Straight out. No proxy.
@@ -25,20 +26,57 @@ pub enum Transport {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Strictness {
     /// Logins and history persist. Letterboxing is on, but can be turned off
-    /// after a warning that says exactly what it leaks.
+    /// — it is the one relaxation that costs fingerprint uniformity.
     Daily,
     /// Nothing persists. Letterboxing enforced.
     Hardened,
 }
 
+/// A proxied route as installed: the protocol, and the port on the host's
+/// loopback it is carried to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Relay {
+    Socks5(u16),
+    Http(u16),
+}
+
+impl Relay {
+    pub fn port(self) -> u16 {
+        match self {
+            Relay::Socks5(p) | Relay::Http(p) => p,
+        }
+    }
+}
+
+impl fmt::Display for Relay {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Relay::Socks5(p) => write!(f, "SOCKS5 127.0.0.1:{p}"),
+            Relay::Http(p) => write!(f, "HTTP 127.0.0.1:{p}"),
+        }
+    }
+}
+
 pub struct Profile {
     pub name: &'static str,
+    /// The name as a menu shows it.
+    pub title: &'static str,
+    /// One line for the menu entry: where it goes, and what it keeps.
+    pub about: &'static str,
     pub transport: Transport,
     pub strictness: Strictness,
     /// The suffix that only means something on this route.
     pub suffix: Option<&'static str>,
-    /// A mark distinct enough to identify a window from one pixel of its edge.
+    /// The route mark: the same glyph `theme/bbiwy-path.css` draws in front of
+    /// the route name in the address bar.
     pub glyph: &'static str,
+    /// What has to be running on the host for the route to reach anything.
+    pub daemon: Option<&'static str>,
+    /// How to get that daemon going, for the message shown when it is not.
+    pub hint: &'static str,
+    /// Other ports that daemon commonly listens on. If the configured port is
+    /// silent but one of these answers, the message says so.
+    pub usual_ports: &'static [u16],
     /// Whether this route is built yet. Order is native → Tor → I2P → Session.
     pub ready: bool,
 }
@@ -46,48 +84,74 @@ pub struct Profile {
 pub const PROFILES: &[Profile] = &[
     Profile {
         name: "daily",
+        title: "Daily",
+        about: "Direct connection. Logins and history are kept.",
         transport: Transport::Direct,
         strictness: Strictness::Daily,
         suffix: None,
-        glyph: "●",
+        glyph: "⬤",
+        daemon: None,
+        hint: "",
+        usual_ports: &[],
         ready: true,
     },
     Profile {
         name: "hardened",
+        title: "Hardened",
+        about: "Direct connection. Nothing is kept.",
         transport: Transport::Direct,
         strictness: Strictness::Hardened,
         suffix: None,
-        glyph: "○",
+        glyph: "◯",
+        daemon: None,
+        hint: "",
+        usual_ports: &[],
         ready: true,
     },
     Profile {
         name: "tor",
+        title: "Tor",
+        about: "Over Tor, with .onion. Nothing is kept.",
         // C tor for v1. Arti later — and when that happens, this line is the
-        // only one that changes.
+        // only one that changes. 9150 is Tor Browser's port and Arti's default;
+        // a system tor listens on 9050 (`bbiwy install --tor-port 9050`).
         transport: Transport::Socks5(9150),
         strictness: Strictness::Hardened,
         suffix: Some(".onion"),
         glyph: "◎",
-        ready: false,
+        daemon: Some("tor"),
+        hint: "Start tor — for a system tor, `sudo systemctl start tor`.",
+        usual_ports: &[9050, 9150],
+        ready: true,
     },
     Profile {
         name: "i2p",
+        title: "I2P",
+        about: "Over I2P, with .i2p. Nothing is kept.",
         // 4444, not 4447. 4447 is the SOCKS port; the I2P project recommends
-        // the HTTP proxy.
+        // the HTTP proxy. i2pd and Java I2P both default to 4444.
         transport: Transport::Http(4444),
         strictness: Strictness::Hardened,
         suffix: Some(".i2p"),
         glyph: "◆",
-        ready: false,
+        daemon: Some("I2P router"),
+        hint: "Start your I2P router (i2pd or Java I2P); its HTTP proxy is what this route uses.",
+        usual_ports: &[4444],
+        ready: true,
     },
     Profile {
         name: "session",
+        title: "Session",
+        about: "Session Router internal services. Nothing is kept.",
         // Reserved. Upstream has no SOCKS listener at all; the plan is a thin
         // SOCKS5 shim once the embedded TCP tunnel work lands.
         transport: Transport::Socks5(1080),
         strictness: Strictness::Hardened,
         suffix: Some(".sesh"),
         glyph: "⬡",
+        daemon: Some("Session Router"),
+        hint: "",
+        usual_ports: &[],
         ready: false,
     },
 ];
@@ -96,121 +160,132 @@ pub fn find(name: &str) -> Option<&'static Profile> {
     PROFILES.iter().find(|p| p.name == name)
 }
 
+/// Names of the routes that can be started today, for messages.
+pub fn ready_names() -> String {
+    PROFILES
+        .iter()
+        .filter(|p| p.ready)
+        .map(|p| p.name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Relay ports chosen at install time. A route absent here uses the table's
+/// port.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Ports(Vec<(&'static str, u16)>);
+
+impl Ports {
+    pub fn get(&self, name: &str) -> Option<u16> {
+        self.0.iter().find(|(n, _)| *n == name).map(|(_, p)| *p)
+    }
+
+    /// Sets the port of a proxied route. A direct route has no relay to move.
+    pub fn set(&mut self, name: &str, port: u16) -> Result<(), String> {
+        let p = find(name).ok_or_else(|| format!("unknown profile: {name}"))?;
+        if p.transport == Transport::Direct {
+            return Err(format!("the {name} route is direct; it has no relay port."));
+        }
+        if port == 0 {
+            return Err("port 0 is not a port.".into());
+        }
+        self.0.retain(|(n, _)| *n != p.name);
+        self.0.push((p.name, port));
+        self.0
+            .sort_by_key(|(n, _)| PROFILES.iter().position(|q| q.name == *n));
+        Ok(())
+    }
+
+    /// The routes whose port was set, with that port.
+    pub fn iter_pairs(&self) -> impl Iterator<Item = (&'static str, u16)> + '_ {
+        self.0.iter().copied()
+    }
+
+    /// Every proxied route with the relay it will actually use, in table order.
+    pub fn resolved(&self) -> Vec<(&'static str, Relay)> {
+        PROFILES
+            .iter()
+            .filter_map(|p| p.relay(self).map(|r| (p.name, r)))
+            .collect()
+    }
+
+    /// The same set with every proxied route's port written out, so that the
+    /// record says what is in effect rather than what was left at a default.
+    pub fn explicit(&self) -> Ports {
+        let mut all = Ports::default();
+        for (name, relay) in self.resolved() {
+            all.0.push((name, relay.port()));
+        }
+        all
+    }
+}
+
 impl Profile {
-    /// The one port this profile may reach. `None` means a direct connection,
-    /// so ordinary web ports are opened instead.
-    pub fn relay_port(&self) -> Option<u16> {
+    /// The relay this profile uses once installed, or `None` for a direct one.
+    pub fn relay(&self, ports: &Ports) -> Option<Relay> {
         match self.transport {
             Transport::Direct => None,
-            Transport::Socks5(p) | Transport::Http(p) => Some(p),
+            Transport::Socks5(d) => Some(Relay::Socks5(ports.get(self.name).unwrap_or(d))),
+            Transport::Http(d) => Some(Relay::Http(ports.get(self.name).unwrap_or(d))),
         }
     }
 
-    /// Turn on the route marking the browser chrome reads.
-    ///
-    /// The window says which route it is on three ways at once -- a glyph, the
-    /// name in letters, and the treatment of its edge -- and all three are
-    /// driven from CSS by these preferences. See `theme/bbiwy-path.css`.
-    ///
-    /// **All five are written, four of them false.** Writing only the true one
-    /// would be enough on a fresh profile and wrong on a used one: `prefs.js`
-    /// keeps whatever was set before, and a leftover would leave a window
-    /// claiming two routes at once. The one accident this browser must never
-    /// have is a window that names the wrong route, so the state is stated in
-    /// full rather than assumed.
-    ///
-    /// The block is fenced. Anything else in `user.js` -- the proxy settings,
-    /// whatever a lab harness put there -- survives being rewritten.
-    pub fn write_route_marking(&self, dir: &Path) -> Result<(), String> {
-        const BEGIN: &str = "// >>> bbiwy route -- written at every start";
-        const END: &str = "// <<< bbiwy route";
-
-        let path = dir.join("user.js");
-        let existing = std::fs::read_to_string(&path).unwrap_or_default();
-
-        let mut kept = String::new();
-        let mut inside = false;
-        for line in existing.lines() {
-            if line == BEGIN {
-                inside = true;
-            } else if line == END {
-                inside = false;
-            } else if !inside {
-                kept.push_str(line);
-                kept.push('\n');
-            }
-        }
-
-        kept.push_str(BEGIN);
-        kept.push('\n');
-        for other in PROFILES {
-            kept.push_str(&format!(
-                "user_pref(\"bbiwy.path.{}\", {});\n",
-                other.name,
-                other.name == self.name
-            ));
-        }
-        kept.push_str(END);
-        kept.push('\n');
-
-        std::fs::write(&path, kept).map_err(|e| format!("could not write {}: {e}", path.display()))
-    }
-
-    pub fn route(&self) -> String {
-        match self.transport {
-            Transport::Direct => "direct".to_string(),
-            Transport::Socks5(p) => format!("SOCKS5 {p}"),
-            Transport::Http(p) => format!("HTTP proxy {p}"),
+    pub fn route(&self, ports: &Ports) -> String {
+        match self.relay(ports) {
+            None => "direct".to_string(),
+            Some(r) => r.to_string(),
         }
     }
-}
 
-/// CJK characters occupy two terminal columns. `{:<20}` counts characters, so
-/// using it directly misaligns any table containing them.
-pub fn pad(s: &str, width: usize) -> String {
-    let w: usize = s.chars().map(char_width).sum();
-    let mut out = s.to_string();
-    for _ in w..width {
-        out.push(' ');
-    }
-    out
-}
-
-fn char_width(c: char) -> usize {
-    match c as u32 {
-        0x1100..=0x115F
-        | 0x2E80..=0xA4CF
-        | 0xAC00..=0xD7A3
-        | 0xF900..=0xFAFF
-        | 0xFE30..=0xFE6F
-        | 0xFF00..=0xFF60
-        | 0xFFE0..=0xFFE6
-        | 0x20000..=0x3FFFD => 2,
-        _ => 1,
+    pub fn strictness_name(&self) -> &'static str {
+        match self.strictness {
+            Strictness::Daily => "daily",
+            Strictness::Hardened => "hardened",
+        }
     }
 }
 
 pub fn list() -> Result<(), String> {
+    let stamp = crate::browser::locate()
+        .ok()
+        .and_then(|i| i.stamp().ok().flatten());
+    let ports = stamp.as_ref().map(|s| s.ports.clone()).unwrap_or_default();
+
     out::line(&format!(
         "  {} {} {} {}  {}",
-        pad("PROFILE", 12),
-        pad("ROUTE", 17),
-        pad("SUFFIX", 9),
-        pad("STATE", 14),
+        pad("PROFILE", 10),
+        pad("ROUTE", 23),
+        pad("SUFFIX", 8),
+        pad("STATE", 24),
         "MARK"
     ))?;
-    out::line("  ────────────────────────────────────────────────────────────")?;
+    out::line(&format!("  {}", "─".repeat(72)))?;
     for p in PROFILES {
+        let state = if crate::status::running(p.name).is_some() {
+            "running".to_string()
+        } else if !p.ready {
+            "not built yet".to_string()
+        } else {
+            match p.relay(&ports) {
+                Some(r) if !crate::sys::tcp_listener(r.port()).is_some_and(|l| l.takes_v4()) => {
+                    format!("{} not running", p.daemon.unwrap_or("relay"))
+                }
+                _ => "ready".to_string(),
+            }
+        };
         out::line(&format!(
             "  {} {} {} {}  {}",
-            pad(p.name, 12),
-            pad(&p.route(), 17),
-            pad(p.suffix.unwrap_or("—"), 9),
-            pad(if p.ready { "ready" } else { "not built yet" }, 14),
+            pad(p.name, 10),
+            pad(&p.route(&ports), 23),
+            pad(p.suffix.unwrap_or("—"), 8),
+            pad(&state, 24),
             p.glyph
         ))?;
     }
     out::line("")?;
+    if stamp.is_none() {
+        out::line("Not installed yet, so the ports above are the defaults. Run `bbiwy install`.")?;
+    }
     out::line("All five profiles share one fingerprint. The difference is strictness,")?;
     out::line("not identity.")
 }

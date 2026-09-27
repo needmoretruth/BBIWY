@@ -36,3 +36,34 @@ fn write(bytes: &[u8]) -> Result<(), String> {
         Err(e) => Err(format!("could not write to stdout: {e}")),
     }
 }
+
+/// A progress note on standard error, so that it never mixes into output a
+/// script might be reading.
+pub fn note(s: &str) {
+    let _ = writeln!(io::stderr().lock(), "{s}");
+}
+
+/// CJK characters occupy two terminal columns. `{:<20}` counts characters, so
+/// using it directly misaligns any table containing them.
+pub fn pad(s: &str, width: usize) -> String {
+    let w: usize = s.chars().map(char_width).sum();
+    let mut out = s.to_string();
+    for _ in w..width {
+        out.push(' ');
+    }
+    out
+}
+
+fn char_width(c: char) -> usize {
+    match c as u32 {
+        0x1100..=0x115F
+        | 0x2E80..=0xA4CF
+        | 0xAC00..=0xD7A3
+        | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE6F
+        | 0xFF00..=0xFF60
+        | 0xFFE0..=0xFFE6
+        | 0x20000..=0x3FFFD => 2,
+        _ => 1,
+    }
+}

@@ -1,14 +1,15 @@
 [package]
 name = "bbiwy"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MPL-2.0"
 description = "BBIWY launcher — seals each browser profile in its own network namespace"
 
-# No dependencies. All this program does is compose three already-audited
-# tools in a fixed order, so there is nothing to pull in — and that keeps the
-# surface anyone has to audit as small as the source file itself.
+# No dependencies. What this program does is compose tools that already exist
+# and are already audited — pasta, nft and setpriv to seal a profile; curl, gpg,
+# tar, zip and unzip only while installing — in a fixed order. There is nothing
+# to pull in, and the surface anyone has to audit stays the size of the source.
 [dependencies]
 
 [profile.release]
