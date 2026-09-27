@@ -2,9 +2,9 @@
 
 **Big Brother Is Watching You** — 네트워크 경로마다 프로필을 따로 두는 프라이버시 브라우저.
 
-> **상태: 초기 개발 중.** 아직 설치할 것이 없습니다. 지금 있는 것은 동작하는 런처와
-> 계측 도구들, 그리고 핵심 발상이 성립한다는 측정 결과입니다.
-> [측정 결과](docs/MEASUREMENTS.md)를 보십시오.
+> **상태: 알파 (0.1.0).** `daily`·`hardened`·`tor`·`i2p` 는 설치하고 쓸 수 있습니다.
+> `session` 은 위쪽에 SOCKS 리스너가 생기기를 기다립니다. 리눅스 x86_64 전용.
+> 무엇을 어디서 확인했는지는 [측정 결과](docs/MEASUREMENTS.md)를 보십시오.
 
 ---
 
@@ -31,8 +31,10 @@
 
 두 층이고, 두 번째 층은 첫 번째 층을 믿지 않습니다.
 
-**브라우저 층** — 프록시 설정은 프로필 단위 설정값이고, 프로필 안에서 아무도 못 바꾸도록
-잠급니다. 원격 이름해석 켬, localhost 가로채기 켬, PAC과 확장 기반 프록시는 영구 금지입니다.
+**브라우저 층** — 브라우저 옆에 까는 잠금 파일 하나(`bbiwy.cfg`)가 **프로필 디렉터리
+이름**으로 프로필마다 잠금을 고릅니다. 환경변수로는 절대 고르지 않습니다. 프록시·원격
+이름해석·주소로 붙는 DNS-over-HTTPS·HTTP/3 끔·미리 연결 끔. 잠금이 다 들어가지 않은 창은
+빨간 **UNLOCKED** 로 표시되고, 어떤 경로도 주장하지 않습니다.
 
 **운영체제 층** — 프로필마다 리눅스 네트워크 네임스페이스를 따로 만들고 nftables 허용 목록을
 겁니다. **그 프로필이 써야 할 포트 하나만** 닿습니다. 나머지는 전부 떨어뜨리고 **셉니다.**
@@ -40,7 +42,7 @@
 
 런처는 **실행할 때 권한을 하나도 쓰지 않습니다.** setuid 도우미도, 파일 capability도,
 polkit도, 시스템 서비스도 없습니다. 이미 검증된 도구 셋(`pasta`·`nft`·`setpriv`)을 정해진
-순서로 부르고, 브라우저를 띄우기 직전에 모든 권한을 떨굽니다.
+순서로 부르고, 브라우저를 띄우기 직전에 허용 목록을 되돌릴 수 있는 권한 둘을 떨구고, 정말 떨어졌는지 확인합니다.
 
 그 뒤로 브라우저는 허용 목록을 지울 수도, 인터페이스를 만들 수도, root를 매핑한
 네임스페이스로 빠져나갈 수도 없습니다. **그런데 파이어폭스 자체 콘텐츠 샌드박스는
@@ -49,26 +51,45 @@ polkit도, 시스템 서비스도 없습니다. 이미 검증된 도구 셋(`pas
 root는 **설치할 때 딱 한 번** 필요합니다 — AppArmor 프로필을 놓기 위해서입니다.
 우분투에서 파이어폭스·크롬·브레이브가 전부 같은 것을 깔고 있습니다.
 
+## 설치와 사용
+
+`pasta`(패키지 `passt`)·`nftables`·`util-linux` 가 필요하고, 설치할 때만
+`curl gpg tar xz zip unzip` 이 필요합니다. 데비안/우분투:
+`sudo apt install passt nftables curl gpg xz-utils zip unzip`.
+
+```sh
+cd launcher && cargo build --release
+./target/release/bbiwy install      # 최신 Mullvad Browser, 서명 확인, 잠금
+sudo ~/.local/bin/bbiwy apparmor    # 우분투 23.10+ 에서만, 한 번 — 필요하면 install 이 알려 줍니다
+bbiwy doctor                        # 이 기계에서 격리가 실제로 성립하는가
+bbiwy run daily                     # 또는 hardened · tor · i2p, 메뉴에서도
+```
+
+| 명령 | |
+|---|---|
+| `bbiwy install [--tor-port 9050] [--i2p-port N]` | 내려받고, 고정해 둔 Tor Browser Developers 키로 서명 확인, 잠금·테마·메뉴 항목. 내려받는 대신 `--from <tar.xz>` 또는 `--browser <dir>` |
+| `bbiwy run <프로필> [url…]` | 네임스페이스에 봉인해서 띄웁니다. 경로 데몬이 없거나 권한 떨굼이 안 먹었으면 거부합니다 |
+| `bbiwy status` | 실행 중인 프로필과, 허용 목록이 통과시킨 것·떨어뜨린 것의 수 |
+| `bbiwy explain <프로필>` | 그 프로필이 받는 pasta 명령·nft 규칙·잠금을 그대로 보여 줍니다 |
+| `bbiwy list` · `bbiwy doctor` · `bbiwy uninstall [--purge]` | |
+
+tor 경로는 `127.0.0.1:9150` 의 SOCKS 포트를 씁니다(시스템 tor 는 9050:
+`bbiwy install --tor-port 9050`). i2p 경로는 i2pd 나 Java I2P 의 HTTP 프록시
+`127.0.0.1:4444` 를 씁니다. 브라우저가 스스로 업데이트하면 테마가 지워지는데,
+`bbiwy run` 이 다음 창을 띄우기 전에 되돌려 놓습니다.
+
 ## 구조
 
 ```
 launcher/          런처 (Rust · #![forbid(unsafe_code)] · 의존성 없음)
 tools/
   isolation-lab/   격리망을 만들고, 빠져나가려는 것을 세고, 판정을 낸다
-  fake-transport/  기록하는 SOCKS5 프록시 — 브라우저가 주소가 아니라 이름을
+  fake-transport/  기록하는 SOCKS5·HTTP 프록시 — 브라우저가 주소가 아니라 이름을
                    넘기는지, 프록시를 우회하는 것이 없는지 증명한다
   leakcheck/       진짜 브라우저를 몰아서 설정 잠금 상태를 읽고 지문을 뽑는다
   probe/           일부러 누수를 낸다. 계측이 눈뜬장님이 아님을 증명하려고
   profiles/        프로필 생성과 지문 비교
 docs/
-```
-
-## 빌드
-
-```sh
-cd launcher && cargo build --release
-./target/release/bbiwy doctor     # 이 기계에서 격리가 실제로 성립하는가
-./target/release/bbiwy list
 ```
 
 `doctor`는 격리가 성립하지 않으면 통과시키지 않습니다. **일부러 그렇게 했습니다** —

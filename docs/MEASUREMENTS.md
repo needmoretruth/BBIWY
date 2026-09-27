@@ -211,6 +211,65 @@ identically on both. The gap is window size, which is ours to pin.
 > HiDPI and a real high-refresh monitor are untested. 38 items is not the whole
 > fingerprint surface.
 
+## 11. The launcher's own pasta command line was fail-open
+
+pasta's forwarding options default to `auto`, and the launcher had named only
+half of them. Measured with the real pasta at three versions — 2024_02_20 (the
+Ubuntu 24.04 build), 2024_09_06 and 2026_09_25 — a listener on the host's
+127.0.0.1 at 5432, 8080 and 9150, and a client inside the namespace:
+
+| command line | inside the namespace |
+|---|---|
+| direct, before: `--tcp-ports none --udp-ports none` | **every** host loopback port reachable — 5432, 8080, 9150 — through `oifname "lo" accept`, uncounted |
+| proxied, before: `--tcp-ports 9150` | pasta **exits**: `Failed to bind port 9150 (Address already in use)`. `-t` binds the *host* port, which tor already holds |
+| now: `-t none -u none -T <relay> -U none --no-map-gw` | only the relay (9150 reaches the host's 9150). 5432 and 8080: refused |
+
+The relay is now matched and counted before the loopback rule; a direct profile
+gets nothing from the host at all.
+
+## 12. `setpriv` can skip the capability drop without a word
+
+Where `no_new_privs` is already set before the launcher runs, pasta's child
+keeps three capabilities, and `CAP_SETPCAP` is not one of them. setpriv then
+runs its command with the bounding set untouched:
+
+| | CapBnd after setpriv | `nft flush ruleset` |
+|---|---|---|
+| `unshare -Urn` (ordinary) | NET_ADMIN, NET_RAW gone | denied |
+| pasta, `no_new_privs` preset | **unchanged** | **succeeds** |
+
+So the process that becomes the browser now reads its own capability sets first
+(`__sealed`), and refuses to start unless NET_ADMIN and NET_RAW are absent from
+every set and `no_new_privs` is on. `doctor` reports the cause.
+
+## 13. The installed locks, on the shipped browser
+
+Mullvad Browser 15.0.23, installed by `bbiwy install` (signature checked against
+the pinned key; a tarball with one byte changed is refused with `BADSIG`), read
+back from chrome scope in each profile directory:
+
+- every profile gets its route's proxy prefs **locked**; tor and session SOCKS5
+  with both remote-DNS prefs, i2p HTTP; direct profiles `trr.mode` 3, locked
+- the address bar reads `⬤ DAILY`, `◯ HARDENED`, `◎ TOR`, `◆ I2P`, `⬡ SESSION`
+  with the edge each route specifies — but only when started by the launcher;
+  the same profile opened by hand is locked the same and claims no route
+- a directory that is not one of BBIWY's gets the strict set and no route
+- **0 of 30 fingerprint items differ** across all seven windows
+
+`daily`, run directly under `strace`: connections to 194.242.2.2:443 (the DoH
+resolver, by address) and the site. **Nothing to port 53.**
+
+The inner half of `bbiwy run`, in a real user+network namespace, with the
+allow-list loaded and the capabilities dropped: tor and i2p fetched a page
+through a logging relay, **by name** (`addrtype: domain`), with **0 blocked
+packets**, and `nft flush ruleset` from after the drop was denied.
+
+> Limits: this sandbox has no `/dev/net/tun` and no AppArmor. pasta's
+> forwarding was measured with the tun device faked, so pasta's own network
+> setup (`--config-net`) and `sudo bbiwy apparmor` have not run here. One run on
+> Ubuntu 24.04 — `bbiwy install`, `sudo bbiwy apparmor`, `bbiwy doctor`,
+> `bbiwy run tor` with a real tor — is what remains before calling it verified.
+
 ---
 
 ## What has not been measured
